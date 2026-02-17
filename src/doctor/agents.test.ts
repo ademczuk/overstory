@@ -63,6 +63,10 @@ describe("checkAgents", () => {
 				verbose: false,
 				redactSecrets: true,
 			},
+			bridge: {
+				enabled: false,
+				teamName: null,
+			},
 		};
 	});
 

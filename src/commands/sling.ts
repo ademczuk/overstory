@@ -26,14 +26,15 @@ import { createManifestLoader } from "../agents/manifest.ts";
 import { writeOverlay } from "../agents/overlay.ts";
 import type { BeadIssue } from "../beads/client.ts";
 import { createBeadsClient } from "../beads/client.ts";
+import { createTaskBridge, resolveBridgeTeamName } from "../bridge/task-bridge.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, HierarchyError, ValidationError } from "../errors.ts";
 import { createMulchClient } from "../mulch/client.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { createRunStore } from "../sessions/store.ts";
-import type { AgentSession, OverlayConfig } from "../types.ts";
+import type { AgentSession, Capability, OverlayConfig } from "../types.ts";
 import { createWorktree } from "../worktree/manager.ts";
-import { createSession, sendKeys } from "../worktree/tmux.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 
 /**
  * Calculate how many milliseconds to sleep before spawning a new agent,
@@ -424,7 +425,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 		// 12. Create tmux session running claude in interactive mode
 		const tmuxSessionName = `overstory-${config.project.name}-${name}`;
 		const claudeCmd = `claude --model ${agentDef.model} --dangerously-skip-permissions`;
-		const pid = await createSession(tmuxSessionName, worktreePath, claudeCmd, {
+		const pid = await getSessionBackend().createSession(tmuxSessionName, worktreePath, claudeCmd, {
 			OVERSTORY_AGENT_NAME: name,
 			OVERSTORY_WORKTREE_PATH: worktreePath,
 		});
@@ -462,6 +463,35 @@ export async function slingCommand(args: string[]): Promise<void> {
 			runStore.close();
 		}
 
+		// 13a-bridge. Project to Claude Code Task UI if bridge is enabled (best-effort)
+		if (config.bridge.enabled) {
+			try {
+				const bridgeTeamName = resolveBridgeTeamName(config.project.name, config.bridge.teamName);
+				const bridge = createTaskBridge(overstoryDir, bridgeTeamName);
+				try {
+					await bridge.addTeamMember({
+						name,
+						agentType: capability,
+						cwd: worktreePath,
+					});
+					await bridge.onDispatch(
+						{
+							beadId: taskId,
+							specPath: specPath ?? "",
+							capability: capability as Capability,
+							fileScope,
+						},
+						parentAgent ?? "orchestrator",
+						name,
+					);
+				} finally {
+					bridge.getStore().close();
+				}
+			} catch {
+				// Bridge is best-effort — failure must not prevent agent spawn
+			}
+		}
+
 		// 13b. Send beacon prompt via tmux send-keys
 		// Allow Claude Code time to initialize its TUI before sending input.
 		// 3s gives the TUI enough time to render and attach its input handler.
@@ -473,14 +503,14 @@ export async function slingCommand(args: string[]): Promise<void> {
 			parentAgent,
 			depth,
 		});
-		await sendKeys(tmuxSessionName, beacon);
+		await getSessionBackend().sendKeys(tmuxSessionName, beacon);
 
 		// 13c. Send a follow-up Enter after a short delay to ensure submission.
 		// Claude Code's TUI may consume the first Enter during initialization,
 		// leaving the beacon text visible but unsubmitted (overstory-yhv6).
 		// A redundant Enter on an empty input line is harmless.
 		await Bun.sleep(500);
-		await sendKeys(tmuxSessionName, "");
+		await getSessionBackend().sendKeys(tmuxSessionName, "");
 
 		// 14. Output result
 		const output = {

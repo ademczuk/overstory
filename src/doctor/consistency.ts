@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, OverstoryConfig } from "../types.ts";
 import { listWorktrees } from "../worktree/manager.ts";
-import { isProcessAlive, listSessions } from "../worktree/tmux.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 import type { DoctorCheck } from "./types.ts";
 
 /**
@@ -29,9 +29,10 @@ export async function checkConsistency(
 	deps?: ConsistencyCheckDeps,
 ): Promise<DoctorCheck[]> {
 	// Use injected dependencies or defaults
+	const backend = getSessionBackend();
 	const { listSessions: listSessionsFn, isProcessAlive: isProcessAliveFn } = deps || {
-		listSessions,
-		isProcessAlive,
+		listSessions: () => backend.listSessions(),
+		isProcessAlive: (pid: number) => backend.isProcessAlive(pid),
 	};
 	const checks: DoctorCheck[] = [];
 

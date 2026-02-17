@@ -9,6 +9,7 @@
 import { join } from "node:path";
 import { loadConfig } from "../config.ts";
 import { OverstoryError } from "../errors.ts";
+import { whichCommand } from "../platform.ts";
 import type { HealthCheck } from "../types.ts";
 import { startDaemon } from "../watchdog/daemon.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
@@ -98,7 +99,7 @@ async function removePidFile(pidFilePath: string): Promise<void> {
  */
 async function resolveOverstoryBin(): Promise<string> {
 	try {
-		const proc = Bun.spawn(["which", "overstory"], {
+		const proc = Bun.spawn([whichCommand(), "overstory"], {
 			stdout: "pipe",
 			stderr: "pipe",
 		});

@@ -41,6 +41,10 @@ export interface OverstoryConfig {
 		verbose: boolean;
 		redactSecrets: boolean;
 	};
+	bridge: {
+		enabled: boolean; // Opt-in: project Overstory events into Claude Code Task UI
+		teamName: string | null; // Override auto-generated CC team name
+	};
 }
 
 // === Agent Manifest ===
@@ -85,7 +89,7 @@ export interface AgentSession {
 	worktreePath: string;
 	branchName: string;
 	beadId: string; // Task being worked
-	tmuxSession: string; // Tmux session name
+	tmuxSession: string; // Session identifier (tmux name on Unix, registry key on Windows)
 	state: AgentState;
 	pid: number | null; // Claude Code PID
 	parentAgent: string | null; // Who spawned this agent (null = orchestrator)

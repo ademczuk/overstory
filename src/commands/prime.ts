@@ -17,7 +17,7 @@ import { createMetricsStore } from "../metrics/store.ts";
 import { createMulchClient } from "../mulch/client.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentIdentity, AgentManifest, SessionCheckpoint, SessionMetrics } from "../types.ts";
-import { getCurrentSessionName } from "../worktree/tmux.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 
 /**
  * Parse CLI flags from the args array.
@@ -258,7 +258,7 @@ async function outputOrchestratorContext(
 ): Promise<void> {
 	// Register orchestrator tmux session for reverse-nudge (agents → orchestrator)
 	try {
-		const tmuxSession = await getCurrentSessionName();
+		const tmuxSession = await getSessionBackend().getCurrentSessionName();
 		if (tmuxSession) {
 			const regPath = join(config.project.root, ".overstory", "orchestrator-tmux.json");
 			await Bun.write(

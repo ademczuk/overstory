@@ -14,6 +14,7 @@ import { mkdir, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DEFAULT_CONFIG } from "../config.ts";
 import { ValidationError } from "../errors.ts";
+import { IS_WINDOWS } from "../platform.ts";
 import type { AgentManifest, OverstoryConfig } from "../types.ts";
 
 const OVERSTORY_DIR = ".overstory";
@@ -255,8 +256,9 @@ function buildHooksJson(): string {
 	// Tool name extraction: reads hook stdin JSON and extracts tool_name field.
 	// Claude Code sends {"tool_name":"Bash","tool_input":{...}} on stdin for
 	// PreToolUse/PostToolUse hooks.
-	const toolNameExtract =
-		'read -r INPUT; TOOL_NAME=$(echo "$INPUT" | sed \'s/.*"tool_name": *"\\([^"]*\\)".*/\\1/\');';
+	const toolNameExtract = IS_WINDOWS
+		? "$INPUT = [Console]::In.ReadLine(); $TOOL_NAME = ($INPUT | ConvertFrom-Json).tool_name;"
+		: 'read -r INPUT; TOOL_NAME=$(echo "$INPUT" | sed \'s/.*"tool_name": *"\\([^"]*\\)".*/\\1/\');';
 
 	const hooks = {
 		hooks: {
@@ -298,7 +300,9 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: `${toolNameExtract} overstory log tool-start --agent orchestrator --tool-name "$TOOL_NAME"`,
+							command: IS_WINDOWS
+								? `pwsh -NoProfile -Command "${toolNameExtract} overstory log tool-start --agent orchestrator --tool-name $TOOL_NAME"`
+								: `${toolNameExtract} overstory log tool-start --agent orchestrator --tool-name "$TOOL_NAME"`,
 						},
 					],
 				},
@@ -309,7 +313,9 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: `${toolNameExtract} overstory log tool-end --agent orchestrator --tool-name "$TOOL_NAME"`,
+							command: IS_WINDOWS
+								? `pwsh -NoProfile -Command "${toolNameExtract} overstory log tool-end --agent orchestrator --tool-name $TOOL_NAME"`
+								: `${toolNameExtract} overstory log tool-end --agent orchestrator --tool-name "$TOOL_NAME"`,
 						},
 					],
 				},

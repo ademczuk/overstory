@@ -8,6 +8,7 @@
  */
 
 import { agentsCommand } from "./commands/agents.ts";
+import { bridgeCommand } from "./commands/bridge.ts";
 import { cleanCommand } from "./commands/clean.ts";
 import { completionsCommand } from "./commands/completions.ts";
 import { coordinatorCommand } from "./commands/coordinator.ts";
@@ -74,6 +75,7 @@ Commands:
   errors [options]        Aggregated error view across agents
   run [sub]               Manage runs (list/show/complete)
   replay [options]        Interleaved chronological replay across agents
+  bridge <sub>            Claude Code Task bridge (status/sync/reset)
   costs [options]          Token/cost analysis and breakdown
   metrics                 Show session metrics
 
@@ -87,6 +89,7 @@ Run 'overstory <command> --help' for command-specific help.`;
 
 const COMMANDS = [
 	"agents",
+	"bridge",
 	"init",
 	"sling",
 	"spec",
@@ -187,6 +190,9 @@ async function main(): Promise<void> {
 	switch (command) {
 		case "agents":
 			await agentsCommand(commandArgs);
+			break;
+		case "bridge":
+			await bridgeCommand(commandArgs);
 			break;
 		case "init":
 			await initCommand(commandArgs);

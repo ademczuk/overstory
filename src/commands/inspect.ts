@@ -13,6 +13,7 @@ import { color } from "../logging/color.ts";
 import { createMetricsStore } from "../metrics/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, StoredEvent, ToolStats } from "../types.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 
 /**
  * Parse a named flag value from args.
@@ -112,20 +113,11 @@ function summarizeArgs(toolArgs: string | null): string {
 }
 
 /**
- * Capture tmux pane output.
+ * Capture session output (tmux pane on Unix, log file on Windows).
  */
-async function captureTmux(sessionName: string, lines: number): Promise<string | null> {
+async function captureSessionOutput(sessionName: string, lines: number): Promise<string | null> {
 	try {
-		const proc = Bun.spawn(["tmux", "capture-pane", "-t", sessionName, "-p", "-S", `-${lines}`], {
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const exitCode = await proc.exited;
-		if (exitCode !== 0) {
-			return null;
-		}
-		const output = await new Response(proc.stdout).text();
-		return output.trim();
+		return await getSessionBackend().captureOutput(sessionName, lines);
 	} catch {
 		return null;
 	}
@@ -242,7 +234,7 @@ export async function gatherInspectData(
 		let tmuxOutput: string | null = null;
 		if (!opts.noTmux && session.tmuxSession) {
 			const lines = opts.tmuxLines ?? 30;
-			tmuxOutput = await captureTmux(session.tmuxSession, lines);
+			tmuxOutput = await captureSessionOutput(session.tmuxSession, lines);
 		}
 
 		return {
@@ -352,13 +344,15 @@ Options:
   --follow           Poll and refresh (clears screen, re-gathers, re-prints)
   --interval <ms>    Polling interval for --follow in milliseconds (default: 3000, min: 500)
   --limit <n>        Number of recent tool calls to show (default: 20)
+  --tail <n>         Show only the last N lines of captured output (lightweight mode)
   --no-tmux          Skip tmux capture-pane
   --help, -h         Show this help
 
 Examples:
   overstory inspect builder-1
   overstory inspect scout-alpha --json
-  overstory inspect builder-1 --follow --interval 2000`;
+  overstory inspect builder-1 --follow --interval 2000
+  overstory inspect builder-1 --tail 30`;
 
 /**
  * Entry point for `overstory inspect <agent-name>`.
@@ -398,9 +392,42 @@ export async function inspectCommand(args: string[]): Promise<void> {
 		});
 	}
 
+	const tailStr = getFlag(args, "--tail");
+	const tailLines = tailStr ? Number.parseInt(tailStr, 10) : null;
+	if (tailStr && (Number.isNaN(tailLines) || (tailLines !== null && tailLines < 1))) {
+		throw new ValidationError("--tail must be a number >= 1", {
+			field: "tail",
+			value: tailStr,
+		});
+	}
+
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
 	const root = config.project.root;
+
+	// --tail mode: lightweight output showing only captured session output
+	if (tailLines !== null) {
+		const data = await gatherInspectData(root, agentName, {
+			limit: 0,
+			noTmux: false,
+			tmuxLines: tailLines,
+		});
+		if (json) {
+			process.stdout.write(
+				`${JSON.stringify({ agent: agentName, state: data.session.state, output: data.tmuxOutput }, null, "\t")}\n`,
+			);
+		} else {
+			process.stdout.write(
+				`${data.session.agentName} [${data.session.state}] — last ${tailLines} lines:\n`,
+			);
+			if (data.tmuxOutput) {
+				process.stdout.write(`${data.tmuxOutput}\n`);
+			} else {
+				process.stdout.write("(no output captured)\n");
+			}
+		}
+		return;
+	}
 
 	if (follow) {
 		// Polling loop

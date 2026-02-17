@@ -180,11 +180,11 @@ async function resolveTranscriptPath(
 		}
 	}
 
-	const homeDir = process.env.HOME ?? "";
+	const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "";
 	const claudeProjectsDir = join(homeDir, ".claude", "projects");
 
 	// Try direct construction from project root
-	const projectKey = projectRoot.replace(/\//g, "-");
+	const projectKey = projectRoot.replace(/[/\\]/g, "-");
 	const directPath = join(claudeProjectsDir, projectKey, `${sessionId}.jsonl`);
 	if (await Bun.file(directPath).exists()) {
 		await Bun.write(cachePath, directPath);

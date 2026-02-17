@@ -9,11 +9,14 @@
 import { join } from "node:path";
 import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
+import { createEventStore } from "../events/store.ts";
 import { color } from "../logging/color.ts";
 import { createMailStore } from "../mail/store.ts";
 import { createMergeQueue } from "../merge/queue.ts";
 import { createMetricsStore } from "../metrics/store.ts";
-import type { MailMessage } from "../types.ts";
+import { launchAgentPanes } from "../observability/win-terminal.ts";
+import type { MailMessage, StoredEvent } from "../types.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 import { gatherStatus, type StatusData } from "./status.ts";
 
 /**
@@ -111,12 +114,15 @@ function horizontalLine(width: number, left: string, _middle: string, right: str
 interface DashboardData {
 	status: StatusData;
 	recentMail: MailMessage[];
+	recentEvents: StoredEvent[];
 	mergeQueue: Array<{ branchName: string; agentName: string; status: string }>;
 	metrics: {
 		totalSessions: number;
 		avgDuration: number;
 		byCapability: Record<string, number>;
 	};
+	/** Captured output per active agent (agentName -> last N lines or null). */
+	agentOutput: Map<string, string | null>;
 }
 
 /**
@@ -137,6 +143,21 @@ async function loadDashboardData(root: string): Promise<DashboardData> {
 		}
 	} catch {
 		// Mail db might not exist
+	}
+
+	// Load recent events
+	let recentEvents: StoredEvent[] = [];
+	try {
+		const eventsDbPath = join(root, ".overstory", "events.db");
+		const eventsFile = Bun.file(eventsDbPath);
+		if (await eventsFile.exists()) {
+			const eventStore = createEventStore(eventsDbPath);
+			const since = new Date(Date.now() - 3600_000).toISOString(); // Last hour
+			recentEvents = eventStore.getTimeline({ since, limit: 20 });
+			eventStore.close();
+		}
+	} catch {
+		// Events db might not exist
 	}
 
 	// Load merge queue
@@ -179,11 +200,28 @@ async function loadDashboardData(root: string): Promise<DashboardData> {
 		// Metrics db might not exist
 	}
 
+	// Capture output for active agents
+	const agentOutput = new Map<string, string | null>();
+	const activeAgents = status.agents.filter(
+		(a) => a.state === "working" || a.state === "booting" || a.state === "stalled",
+	);
+	const backend = getSessionBackend();
+	for (const agent of activeAgents) {
+		try {
+			const output = await backend.captureOutput(agent.tmuxSession, 30);
+			agentOutput.set(agent.agentName, output);
+		} catch {
+			agentOutput.set(agent.agentName, null);
+		}
+	}
+
 	return {
 		status,
 		recentMail,
+		recentEvents,
 		mergeQueue,
 		metrics: { totalSessions, avgDuration, byCapability },
+		agentOutput,
 	};
 }
 
@@ -319,6 +357,96 @@ function renderAgentPanel(
 }
 
 /**
+ * Render side-by-side output panes for active agents.
+ *
+ * Each agent gets an equal-width column. Lines are wrapped/truncated
+ * to fit the column width. Returns empty string if no output to show.
+ */
+function renderOutputPanel(
+	data: DashboardData,
+	width: number,
+	panelHeight: number,
+	startRow: number,
+): string {
+	if (data.agentOutput.size === 0) return "";
+
+	const agents = [...data.agentOutput.entries()];
+	const numCols = Math.min(agents.length, 4); // Max 4 side-by-side panes
+	const colWidth = Math.floor((width - 1) / numCols); // -1 for right border
+	let output = "";
+
+	// Panel header
+	const headerLine = `${BOX.vertical} ${color.bold}Agent Output${color.reset} (${agents.length} active)`;
+	const headerPadding = " ".repeat(
+		Math.max(0, width - headerLine.length - 1 + color.bold.length + color.reset.length),
+	);
+	output += `${CURSOR.cursorTo(startRow, 1)}${headerLine}${headerPadding}${BOX.vertical}\n`;
+
+	// Column headers with agent names
+	let colHeaderLine = "";
+	for (let c = 0; c < numCols; c++) {
+		const entry = agents[c];
+		if (!entry) continue;
+		const [agentName] = entry;
+		const stateAgent = data.status.agents.find((a) => a.agentName === agentName);
+		const stateColor = stateAgent ? getStateColor(stateAgent.state) : color.white;
+		const nameStr = truncate(agentName, colWidth - 4);
+		const padLen = colWidth - nameStr.length - 3;
+		colHeaderLine += `${BOX.vertical} ${stateColor}${nameStr}${color.reset}${" ".repeat(Math.max(0, padLen))}`;
+	}
+	colHeaderLine += BOX.vertical;
+	output += `${CURSOR.cursorTo(startRow + 1, 1)}${colHeaderLine}\n`;
+
+	// Separator
+	let sepLine = "";
+	for (let c = 0; c < numCols; c++) {
+		sepLine += (c === 0 ? BOX.tee : BOX.cross) + BOX.horizontal.repeat(colWidth - 1);
+	}
+	sepLine += BOX.teeRight;
+	output += `${CURSOR.cursorTo(startRow + 2, 1)}${sepLine}\n`;
+
+	// Content rows: split each agent's output into lines and render side by side
+	const contentHeight = panelHeight - 4; // header + col header + separator + bottom border
+	const agentLines: string[][] = [];
+	for (let c = 0; c < numCols; c++) {
+		const entry = agents[c];
+		if (!entry) {
+			agentLines.push([]);
+			continue;
+		}
+		const [, text] = entry;
+		if (text) {
+			const allLines = text.split("\n");
+			// Take the last N lines that fit
+			agentLines.push(allLines.slice(-contentHeight));
+		} else {
+			agentLines.push(["(no output)"]);
+		}
+	}
+
+	for (let row = 0; row < contentHeight; row++) {
+		let rowLine = "";
+		for (let c = 0; c < numCols; c++) {
+			const lines = agentLines[c] ?? [];
+			const lineText = lines[row] ?? "";
+			const displayWidth = colWidth - 2; // 1 for border, 1 for padding
+			const truncatedLine =
+				lineText.length > displayWidth ? lineText.slice(0, displayWidth) : lineText;
+			const padLen = displayWidth - truncatedLine.length;
+			rowLine += `${BOX.vertical} ${color.dim}${truncatedLine}${color.reset}${" ".repeat(Math.max(0, padLen))}`;
+		}
+		rowLine += BOX.vertical;
+		output += `${CURSOR.cursorTo(startRow + 3 + row, 1)}${rowLine}\n`;
+	}
+
+	// Bottom border
+	const bottomBorder = horizontalLine(width, BOX.tee, BOX.horizontal, BOX.teeRight);
+	output += `${CURSOR.cursorTo(startRow + 3 + contentHeight, 1)}${bottomBorder}\n`;
+
+	return output;
+}
+
+/**
  * Get color for mail priority.
  */
 function getPriorityColor(priority: string): string {
@@ -344,9 +472,10 @@ function renderMailPanel(
 	width: number,
 	height: number,
 	startRow: number,
+	overrideWidth?: number,
 ): string {
 	const panelHeight = Math.floor(height * 0.3);
-	const panelWidth = Math.floor(width * 0.6);
+	const panelWidth = overrideWidth ?? Math.floor(width * 0.6);
 	let output = "";
 
 	const unreadCount = data.status.unreadMailCount;
@@ -393,6 +522,82 @@ function renderMailPanel(
 	for (let i = messages.length; i < maxRows; i++) {
 		const emptyLine = `${BOX.vertical}${" ".repeat(panelWidth - 2)}${BOX.vertical}`;
 		output += `${CURSOR.cursorTo(startRow + 2 + i, 1)}${emptyLine}\n`;
+	}
+
+	return output;
+}
+
+/**
+ * Get color for event level.
+ */
+function getEventColor(level: string): string {
+	switch (level) {
+		case "error":
+			return color.red;
+		case "warn":
+			return color.yellow;
+		case "info":
+			return color.cyan;
+		case "debug":
+			return color.dim;
+		default:
+			return color.white;
+	}
+}
+
+/**
+ * Render the events panel (middle-center section in classic layout).
+ */
+function renderEventsPanel(
+	data: DashboardData,
+	width: number,
+	height: number,
+	startRow: number,
+	startCol: number,
+	overrideWidth?: number,
+): string {
+	const panelHeight = Math.floor(height * 0.3);
+	const panelWidth = overrideWidth ?? width - startCol + 1;
+	let output = "";
+
+	const headerLine = `${BOX.vertical} ${color.bold}Events${color.reset} (${data.recentEvents.length})`;
+	const headerPadding = " ".repeat(
+		Math.max(0, panelWidth - headerLine.length - 1 + color.bold.length + color.reset.length),
+	);
+	output += `${CURSOR.cursorTo(startRow, startCol)}${headerLine}${headerPadding}${BOX.vertical}\n`;
+
+	const separator = horizontalLine(panelWidth, BOX.cross, BOX.horizontal, BOX.cross);
+	output += `${CURSOR.cursorTo(startRow + 1, startCol)}${separator}\n`;
+
+	const maxRows = panelHeight - 3;
+	// Show most recent events first
+	const events = [...data.recentEvents].reverse().slice(0, maxRows);
+
+	for (let i = 0; i < events.length; i++) {
+		const evt = events[i];
+		if (!evt) continue;
+
+		const levelColor = getEventColor(evt.level);
+		const time = new Date(evt.createdAt).toLocaleTimeString([], {
+			hour: "2-digit",
+			minute: "2-digit",
+		});
+		const agent = truncate(evt.agentName, 10);
+		const eventDesc = evt.toolName
+			? `${evt.eventType.replace("tool_", "")} ${evt.toolName}`
+			: evt.eventType;
+		const desc = truncate(eventDesc, panelWidth - 22);
+
+		const line = `${BOX.vertical} ${time} ${levelColor}${pad(agent, 10)}${color.reset} ${desc}`;
+		const padding = " ".repeat(
+			Math.max(0, panelWidth - line.length - 1 + levelColor.length + color.reset.length),
+		);
+		output += `${CURSOR.cursorTo(startRow + 2 + i, startCol)}${line}${padding}${BOX.vertical}\n`;
+	}
+
+	for (let i = events.length; i < maxRows; i++) {
+		const emptyLine = `${BOX.vertical}${" ".repeat(panelWidth - 2)}${BOX.vertical}`;
+		output += `${CURSOR.cursorTo(startRow + 2 + i, startCol)}${emptyLine}\n`;
 	}
 
 	return output;
@@ -504,36 +709,167 @@ function renderMetricsPanel(
 }
 
 /**
+ * Render a compact agent table sized to content (no empty filler rows).
+ * Used in the output-pane layout to give maximum space to output.
+ */
+function renderAgentPanelCompact(
+	data: DashboardData,
+	width: number,
+	panelHeight: number,
+	startRow: number,
+): string {
+	let output = "";
+
+	// Panel header
+	const headerLine = `${BOX.vertical} ${color.bold}Agents${color.reset} (${data.status.agents.length})`;
+	const headerPadding = " ".repeat(
+		width - headerLine.length - 1 + color.bold.length + color.reset.length,
+	);
+	output += `${CURSOR.cursorTo(startRow, 1)}${headerLine}${headerPadding}${BOX.vertical}\n`;
+
+	// Column headers
+	const colHeaders = `${BOX.vertical} St Name            Capability    State      Bead ID          Duration  Tmux ${BOX.vertical}`;
+	output += `${CURSOR.cursorTo(startRow + 1, 1)}${colHeaders}\n`;
+
+	// Separator
+	const separator = horizontalLine(width, BOX.tee, BOX.horizontal, BOX.teeRight);
+	output += `${CURSOR.cursorTo(startRow + 2, 1)}${separator}\n`;
+
+	// Sort agents: active first
+	const agents = [...data.status.agents].sort((a, b) => {
+		const activeStates = ["working", "booting", "stalled"];
+		const aActive = activeStates.includes(a.state);
+		const bActive = activeStates.includes(b.state);
+		if (aActive && !bActive) return -1;
+		if (!aActive && bActive) return 1;
+		return 0;
+	});
+
+	const now = Date.now();
+	const maxRows = panelHeight - 4; // header + col headers + separator + border
+	const visibleAgents = agents.slice(0, maxRows);
+
+	for (let i = 0; i < visibleAgents.length; i++) {
+		const agent = visibleAgents[i];
+		if (!agent) continue;
+
+		const icon = getStateIcon(agent.state);
+		const stateColor = getStateColor(agent.state);
+		const name = pad(truncate(agent.agentName, 15), 15);
+		const capability = pad(truncate(agent.capability, 12), 12);
+		const state = pad(agent.state, 10);
+		const beadId = pad(truncate(agent.beadId, 16), 16);
+		const endTime =
+			agent.state === "completed" || agent.state === "zombie"
+				? new Date(agent.lastActivity).getTime()
+				: now;
+		const duration = formatDuration(endTime - new Date(agent.startedAt).getTime());
+		const durationPadded = pad(duration, 9);
+		const tmuxAlive = data.status.tmuxSessions.some((s) => s.name === agent.tmuxSession);
+		const tmuxDot = tmuxAlive ? `${color.green}●${color.reset}` : `${color.red}○${color.reset}`;
+
+		const line = `${BOX.vertical} ${stateColor}${icon}${color.reset}  ${name} ${capability} ${stateColor}${state}${color.reset} ${beadId} ${durationPadded} ${tmuxDot}    ${BOX.vertical}`;
+		output += `${CURSOR.cursorTo(startRow + 3 + i, 1)}${line}\n`;
+	}
+
+	// Bottom border (no filler rows)
+	const bottomBorder = horizontalLine(width, BOX.tee, BOX.horizontal, BOX.teeRight);
+	output += `${CURSOR.cursorTo(startRow + 3 + visibleAgents.length, 1)}${bottomBorder}\n`;
+
+	return output;
+}
+
+/**
+ * Render a single-line status bar with mail, merge queue, and metrics summary.
+ */
+function renderStatusBar(data: DashboardData, width: number, row: number): string {
+	const mail = `Mail: ${data.status.unreadMailCount} unread`;
+	const events = `Events: ${data.recentEvents.length}`;
+	const merge = `Merge: ${data.mergeQueue.length} queued`;
+	const sessions = `Sessions: ${data.metrics.totalSessions}`;
+	const avgDur = `Avg: ${formatDuration(data.metrics.avgDuration)}`;
+	const byCapability = Object.entries(data.metrics.byCapability)
+		.map(([cap, count]) => `${cap}:${count}`)
+		.join(" ");
+	const content = `${mail} | ${events} | ${merge} | ${sessions} | ${avgDur}${byCapability ? ` | ${byCapability}` : ""}`;
+
+	const line = `${BOX.bottomLeft}${BOX.horizontal} ${truncate(content, width - 4)} ${BOX.horizontal.repeat(Math.max(0, width - content.length - 5))}${BOX.bottomRight}`;
+	return `${CURSOR.cursorTo(row, 1)}${line}`;
+}
+
+/**
  * Render the full dashboard.
+ *
+ * When active agents have captured output, the layout shifts to give the
+ * output panes the largest share of screen real-estate:
+ *
+ *   Header (2 rows)
+ *   Agent table (sized to content, capped at 25% of height)
+ *   Agent output panes (fills remaining space minus footer)
+ *   Status bar (1 row: mail count + merge queue count + metrics summary)
+ *
+ * When no output is available, the classic layout is used:
+ *
+ *   Header (2 rows)
+ *   Agent table (40%)
+ *   Mail (30%, left 60%) + Merge queue (30%, right 40%)
+ *   Metrics footer (4 rows)
  */
 function renderDashboard(data: DashboardData, interval: number): void {
 	const width = process.stdout.columns ?? 100;
 	const height = process.stdout.rows ?? 30;
+	const hasOutput = data.agentOutput.size > 0;
 
 	let output = CURSOR.clear;
 
 	// Header (rows 1-2)
 	output += renderHeader(width, interval);
 
-	// Agent panel (rows 3 to ~40% of screen)
 	const agentPanelStart = 3;
-	output += renderAgentPanel(data, width, height, agentPanelStart);
 
-	// Calculate middle panels start row
-	const agentPanelHeight = Math.floor(height * 0.4);
-	const middlePanelStart = agentPanelStart + agentPanelHeight + 1;
+	if (hasOutput) {
+		// --- Compact layout: agent table + output panes + status bar ---
 
-	// Mail panel (left 60%)
-	output += renderMailPanel(data, width, height, middlePanelStart);
+		// Agent table: sized to content, capped at 25% of screen
+		const agentRows = data.status.agents.length;
+		const agentTableRows = Math.min(agentRows, Math.floor(height * 0.25));
+		// 4 = header row + column headers + separator + bottom border
+		const agentPanelHeight = agentTableRows + 4;
+		output += renderAgentPanelCompact(data, width, agentPanelHeight, agentPanelStart);
 
-	// Merge queue panel (right 40%)
-	const mergeQueueCol = Math.floor(width * 0.6) + 1;
-	output += renderMergeQueuePanel(data, width, height, middlePanelStart, mergeQueueCol);
+		// Status bar: 1 row at bottom for mail/merge/metrics summary
+		const statusBarRow = height;
 
-	// Metrics panel (bottom strip)
-	const middlePanelHeight = Math.floor(height * 0.3);
-	const metricsStart = middlePanelStart + middlePanelHeight + 1;
-	output += renderMetricsPanel(data, width, height, metricsStart);
+		// Output panes fill everything between agent table and status bar
+		const outputStart = agentPanelStart + agentPanelHeight;
+		const outputHeight = statusBarRow - outputStart;
+		if (outputHeight > 4) {
+			output += renderOutputPanel(data, width, outputHeight, outputStart);
+		}
+
+		// Compact status bar at bottom
+		output += renderStatusBar(data, width, statusBarRow);
+	} else {
+		// --- Classic layout: full panels ---
+		output += renderAgentPanel(data, width, height, agentPanelStart);
+
+		const agentPanelHeight = Math.floor(height * 0.4);
+		const middlePanelStart = agentPanelStart + agentPanelHeight + 1;
+
+		// Three-column middle section: Mail | Events | Merge Queue
+		const colWidth = Math.floor(width / 3);
+		output += renderMailPanel(data, width, height, middlePanelStart, colWidth);
+
+		const eventsCol = colWidth + 1;
+		output += renderEventsPanel(data, width, height, middlePanelStart, eventsCol, colWidth);
+
+		const mergeQueueCol = colWidth * 2 + 1;
+		output += renderMergeQueuePanel(data, width, height, middlePanelStart, mergeQueueCol);
+
+		const middlePanelHeight = Math.floor(height * 0.3);
+		const metricsStart = middlePanelStart + middlePanelHeight + 1;
+		output += renderMetricsPanel(data, width, height, metricsStart);
+	}
 
 	process.stdout.write(output);
 }
@@ -546,14 +882,21 @@ const DASHBOARD_HELP = `overstory dashboard — Live TUI dashboard for agent mon
 Usage: overstory dashboard [--interval <ms>]
 
 Options:
-  --interval <ms>    Poll interval in milliseconds (default: 2000, min: 500)
-  --help, -h         Show this help
+  --interval <ms>       Poll interval in milliseconds (default: 2000, min: 500)
+  --launch-terminals    Open Windows Terminal panes tailing each agent's log
+  --help, -h            Show this help
 
 Dashboard panels:
   - Agent panel: Active agents with status, capability, bead ID, duration
+  - Agent output: Live side-by-side output panes for active agents (auto-shown)
   - Mail panel: Recent messages with priority and time
+  - Events panel: Recent tool/session events timeline
   - Merge queue: Pending/merging/conflict entries
   - Metrics: Session counts, avg duration, by-capability breakdown
+
+When active agents are running, the layout switches to a compact mode that
+maximizes output pane space (up to 4 agents side-by-side). When no agents
+are active, the classic multi-panel layout is shown.
 
 Press Ctrl+C to exit.`;
 
@@ -576,6 +919,15 @@ export async function dashboardCommand(args: string[]): Promise<void> {
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
 	const root = config.project.root;
+
+	// --launch-terminals: open Windows Terminal panes for active agents
+	if (args.includes("--launch-terminals")) {
+		const status = await gatherStatus(root, "orchestrator", false);
+		const activeAgents = status.agents.filter(
+			(a) => a.state === "working" || a.state === "booting" || a.state === "stalled",
+		);
+		await launchAgentPanes(activeAgents, join(root, ".overstory"));
+	}
 
 	// Hide cursor
 	process.stdout.write(CURSOR.hideCursor);

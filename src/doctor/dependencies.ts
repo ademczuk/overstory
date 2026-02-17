@@ -1,3 +1,4 @@
+import { IS_WINDOWS } from "../platform.ts";
 import type { DoctorCheck, DoctorCheckFn } from "./types.ts";
 
 /**
@@ -11,7 +12,10 @@ export const checkDependencies: DoctorCheckFn = async (
 	const requiredTools = [
 		{ name: "git", versionFlag: "--version", required: true },
 		{ name: "bun", versionFlag: "--version", required: true },
-		{ name: "tmux", versionFlag: "-V", required: true },
+		// Windows uses PowerShell for session management; Unix uses tmux
+		...(IS_WINDOWS
+			? [{ name: "pwsh", versionFlag: "--version", required: true }]
+			: [{ name: "tmux", versionFlag: "-V", required: true }]),
 		{ name: "bd", versionFlag: "--version", required: true },
 		{ name: "mulch", versionFlag: "--version", required: true },
 	];

@@ -70,6 +70,10 @@ const mockConfig: OverstoryConfig = {
 		verbose: false,
 		redactSecrets: true,
 	},
+	bridge: {
+		enabled: false,
+		teamName: null,
+	},
 };
 
 describe("checkConfig", () => {

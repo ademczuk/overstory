@@ -13,7 +13,7 @@ import { createMailStore } from "../mail/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { listWorktrees, removeWorktree } from "../worktree/manager.ts";
-import { isSessionAlive, killSession } from "../worktree/tmux.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 
 function hasFlag(args: string[], flag: string): boolean {
 	return args.includes(flag);
@@ -103,10 +103,10 @@ async function handleClean(args: string[], root: string, json: boolean): Promise
 			// If --all, clean everything
 			// Kill tmux session if still alive
 			if (session?.tmuxSession) {
-				const alive = await isSessionAlive(session.tmuxSession);
+				const alive = await getSessionBackend().isSessionAlive(session.tmuxSession);
 				if (alive) {
 					try {
-						await killSession(session.tmuxSession);
+						await getSessionBackend().killSession(session.tmuxSession);
 					} catch {
 						// Best effort
 					}

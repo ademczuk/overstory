@@ -1,4 +1,4 @@
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { ConfigError, ValidationError } from "./errors.ts";
 import type { OverstoryConfig } from "./types.ts";
 
@@ -46,6 +46,10 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 	logging: {
 		verbose: false,
 		redactSecrets: true,
+	},
+	bridge: {
+		enabled: false,
+		teamName: null,
 	},
 };
 
@@ -488,7 +492,7 @@ export async function loadConfig(projectRoot: string): Promise<OverstoryConfig> 
 	// Start with defaults, setting the project root
 	const defaults = structuredClone(DEFAULT_CONFIG);
 	defaults.project.root = resolvedRoot;
-	defaults.project.name = resolvedRoot.split("/").pop() ?? "unknown";
+	defaults.project.name = basename(resolvedRoot) || "unknown";
 
 	// Try to read the config file
 	const file = Bun.file(configPath);

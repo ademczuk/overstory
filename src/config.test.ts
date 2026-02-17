@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { DEFAULT_CONFIG, loadConfig, resolveProjectRoot } from "./config.ts";
 import { ValidationError } from "./errors.ts";
 import { cleanupTempDir, createTempGitRepo, runGitInDir } from "./test-helpers.ts";
@@ -42,8 +42,7 @@ describe("loadConfig", () => {
 
 	test("sets project.name from directory name", async () => {
 		const config = await loadConfig(tempDir);
-		const parts = tempDir.split("/");
-		const expectedName = parts[parts.length - 1] ?? "unknown";
+		const expectedName = basename(tempDir) || "unknown";
 		expect(config.project.name).toBe(expectedName);
 	});
 

@@ -22,14 +22,16 @@
 import { existsSync } from "node:fs";
 import { readdir, rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveBridgeTeamName } from "../bridge/task-bridge.ts";
 import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { createMulchClient } from "../mulch/client.ts";
+import { getHomeDir } from "../platform.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession, MulchDoctorResult, MulchPruneResult, MulchStatus } from "../types.ts";
 import { listWorktrees, removeWorktree } from "../worktree/manager.ts";
-import { killSession, listSessions } from "../worktree/tmux.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 
 function hasFlag(args: string[], flag: string): boolean {
 	return args.includes(flag);
@@ -116,6 +118,7 @@ interface CleanResult {
 	specsCleared: boolean;
 	nudgeStateCleared: boolean;
 	currentRunCleared: boolean;
+	bridgeCleared: boolean;
 	mulchHealth: {
 		checked: boolean;
 		domainsNearLimit: Array<{ domain: string; recordCount: number; warnThreshold: number }>;
@@ -139,7 +142,7 @@ async function killAllTmuxSessions(overstoryDir: string, projectName: string): P
 	let killed = 0;
 	const projectPrefix = `overstory-${projectName}-`;
 	try {
-		const tmuxSessions = await listSessions();
+		const tmuxSessions = await getSessionBackend().listSessions();
 		const overStorySessions = tmuxSessions.filter((s) => s.name.startsWith(projectPrefix));
 		if (overStorySessions.length === 0) {
 			return 0;
@@ -157,7 +160,7 @@ async function killAllTmuxSessions(overstoryDir: string, projectName: string): P
 
 		for (const session of toKill) {
 			try {
-				await killSession(session.name);
+				await getSessionBackend().killSession(session.name);
 				killed++;
 			} catch {
 				// Best effort
@@ -460,6 +463,7 @@ export async function cleanCommand(args: string[]): Promise<void> {
 		specsCleared: false,
 		nudgeStateCleared: false,
 		currentRunCleared: false,
+		bridgeCleared: false,
 		mulchHealth: null,
 	};
 
@@ -536,6 +540,24 @@ export async function cleanCommand(args: string[]): Promise<void> {
 		result.currentRunCleared = await deleteFile(join(overstoryDir, "current-run.txt"));
 	}
 
+	// 9. Clean bridge state (bridge.db + Claude Code team/task directories)
+	if (all && config.bridge.enabled) {
+		const bridgeDbWiped = await wipeSqliteDb(join(overstoryDir, "bridge.db"));
+		const teamName = resolveBridgeTeamName(config.project.name, config.bridge.teamName);
+		const claudeDir = join(getHomeDir(), ".claude");
+		try {
+			await rm(join(claudeDir, "teams", teamName), { recursive: true, force: true });
+		} catch {
+			// May not exist
+		}
+		try {
+			await rm(join(claudeDir, "tasks", teamName), { recursive: true, force: true });
+		} catch {
+			// May not exist
+		}
+		result.bridgeCleared = bridgeDbWiped;
+	}
+
 	// Output
 	if (json) {
 		process.stdout.write(`${JSON.stringify(result, null, "\t")}\n`);
@@ -570,6 +592,7 @@ export async function cleanCommand(args: string[]): Promise<void> {
 	if (result.specsCleared) lines.push("Cleared specs/");
 	if (result.nudgeStateCleared) lines.push("Cleared nudge-state.json");
 	if (result.currentRunCleared) lines.push("Cleared current-run.txt");
+	if (result.bridgeCleared) lines.push("Cleared bridge.db + Claude Code team/task directories");
 
 	// Mulch health diagnostics (shown before cleanup results)
 	if (result.mulchHealth?.checked) {

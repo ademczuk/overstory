@@ -16,12 +16,14 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
+import { createTaskBridge, resolveBridgeTeamName } from "../bridge/task-bridge.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import { IS_WINDOWS } from "../platform.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
-import { createSession, isSessionAlive, killSession, sendKeys } from "../worktree/tmux.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 
 /** Default coordinator agent name. */
 const COORDINATOR_NAME = "coordinator";
@@ -257,7 +259,7 @@ export function resolveAttach(args: string[], isTTY: boolean): boolean {
 }
 
 async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Promise<void> {
-	const tmux = deps._tmux ?? { createSession, isSessionAlive, killSession, sendKeys };
+	const tmux = deps._tmux ?? getSessionBackend();
 
 	const json = args.includes("--json");
 	const shouldAttach = resolveAttach(args, !!process.stdout.isTTY);
@@ -358,6 +360,25 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 
 		store.upsert(session);
 
+		// Initialize Claude Code Task bridge if enabled (best-effort, never blocking)
+		if (config.bridge.enabled) {
+			try {
+				const bridgeTeamName = resolveBridgeTeamName(config.project.name, config.bridge.teamName);
+				const bridge = createTaskBridge(overstoryDir, bridgeTeamName);
+				try {
+					await bridge.createTeam({
+						projectName: config.project.name,
+						projectRoot,
+						sessionId: session.id,
+					});
+				} finally {
+					bridge.getStore().close();
+				}
+			} catch {
+				// Bridge is best-effort — failure must not prevent coordinator start
+			}
+		}
+
 		// Send beacon after TUI initialization delay
 		await Bun.sleep(3_000);
 		const beacon = buildCoordinatorBeacon();
@@ -410,7 +431,7 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			process.stdout.write(`  PID:     ${pid}\n`);
 		}
 
-		if (shouldAttach) {
+		if (shouldAttach && !IS_WINDOWS) {
 			Bun.spawnSync(["tmux", "attach-session", "-t", tmuxSession], {
 				stdio: ["inherit", "inherit", "inherit"],
 			});
@@ -428,7 +449,7 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
  * 3. Mark session as completed in SessionStore
  */
 async function stopCoordinator(args: string[], deps: CoordinatorDeps = {}): Promise<void> {
-	const tmux = deps._tmux ?? { createSession, isSessionAlive, killSession, sendKeys };
+	const tmux = deps._tmux ?? getSessionBackend();
 
 	const json = args.includes("--json");
 	const cwd = process.cwd();
@@ -497,7 +518,7 @@ async function stopCoordinator(args: string[], deps: CoordinatorDeps = {}): Prom
  * Checks session registry and tmux liveness to report actual state.
  */
 async function statusCoordinator(args: string[], deps: CoordinatorDeps = {}): Promise<void> {
-	const tmux = deps._tmux ?? { createSession, isSessionAlive, killSession, sendKeys };
+	const tmux = deps._tmux ?? getSessionBackend();
 
 	const json = args.includes("--json");
 	const cwd = process.cwd();

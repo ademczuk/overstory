@@ -19,9 +19,10 @@ import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import { IS_WINDOWS } from "../platform.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
-import { createSession, isSessionAlive, killSession, sendKeys } from "../worktree/tmux.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 
 /** Default monitor agent name. */
 const MONITOR_NAME = "monitor";
@@ -88,7 +89,7 @@ async function startMonitor(args: string[]): Promise<void> {
 			existing.state !== "completed" &&
 			existing.state !== "zombie"
 		) {
-			const alive = await isSessionAlive(existing.tmuxSession);
+			const alive = await getSessionBackend().isSessionAlive(existing.tmuxSession);
 			if (alive) {
 				throw new AgentError(
 					`Monitor is already running (tmux: ${existing.tmuxSession}, since: ${existing.startedAt})`,
@@ -129,7 +130,7 @@ async function startMonitor(args: string[]): Promise<void> {
 			const escaped = agentDef.replace(/'/g, "'\\''");
 			claudeCmd += ` --append-system-prompt '${escaped}'`;
 		}
-		const pid = await createSession(tmuxSession, projectRoot, claudeCmd, {
+		const pid = await getSessionBackend().createSession(tmuxSession, projectRoot, claudeCmd, {
 			OVERSTORY_AGENT_NAME: MONITOR_NAME,
 		});
 
@@ -159,11 +160,11 @@ async function startMonitor(args: string[]): Promise<void> {
 		// Send beacon after TUI initialization delay
 		await Bun.sleep(3_000);
 		const beacon = buildMonitorBeacon();
-		await sendKeys(tmuxSession, beacon);
+		await getSessionBackend().sendKeys(tmuxSession, beacon);
 
 		// Follow-up Enter to ensure submission (same pattern as sling.ts)
 		await Bun.sleep(500);
-		await sendKeys(tmuxSession, "");
+		await getSessionBackend().sendKeys(tmuxSession, "");
 
 		const output = {
 			agentName: MONITOR_NAME,
@@ -182,7 +183,7 @@ async function startMonitor(args: string[]): Promise<void> {
 			process.stdout.write(`  PID:     ${pid}\n`);
 		}
 
-		if (shouldAttach) {
+		if (shouldAttach && !IS_WINDOWS) {
 			Bun.spawnSync(["tmux", "attach-session", "-t", tmuxSession], {
 				stdio: ["inherit", "inherit", "inherit"],
 			});
@@ -222,9 +223,9 @@ async function stopMonitor(args: string[]): Promise<void> {
 		}
 
 		// Kill tmux session with process tree cleanup
-		const alive = await isSessionAlive(session.tmuxSession);
+		const alive = await getSessionBackend().isSessionAlive(session.tmuxSession);
 		if (alive) {
-			await killSession(session.tmuxSession);
+			await getSessionBackend().killSession(session.tmuxSession);
 		}
 
 		// Update session state
@@ -271,7 +272,7 @@ async function statusMonitor(args: string[]): Promise<void> {
 			return;
 		}
 
-		const alive = await isSessionAlive(session.tmuxSession);
+		const alive = await getSessionBackend().isSessionAlive(session.tmuxSession);
 
 		// Reconcile state: if session says active but tmux is dead, update.
 		// We already filtered out completed/zombie states above, so if tmux is dead

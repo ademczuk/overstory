@@ -10,12 +10,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
+import { whichCommand } from "../platform.ts";
 import { createMulchClient } from "./client.ts";
 
 // Check if mulch is available
 let hasMulch = false;
 try {
-	const proc = Bun.spawn(["which", "mulch"], { stdout: "pipe", stderr: "pipe" });
+	const proc = Bun.spawn([whichCommand(), "mulch"], { stdout: "pipe", stderr: "pipe" });
 	const exitCode = await proc.exited;
 	hasMulch = exitCode === 0;
 } catch {

@@ -21,7 +21,7 @@ import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
-import { createSession, isSessionAlive, killSession, sendKeys } from "../worktree/tmux.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 
 /**
  * Build the supervisor startup beacon.
@@ -153,7 +153,7 @@ async function startSupervisor(args: string[]): Promise<void> {
 			existing.state !== "completed" &&
 			existing.state !== "zombie"
 		) {
-			const alive = await isSessionAlive(existing.tmuxSession);
+			const alive = await getSessionBackend().isSessionAlive(existing.tmuxSession);
 			if (alive) {
 				throw new AgentError(
 					`Supervisor '${flags.name}' is already running (tmux: ${existing.tmuxSession}, since: ${existing.startedAt})`,
@@ -193,7 +193,7 @@ async function startSupervisor(args: string[]): Promise<void> {
 			const escaped = agentDef.replace(/'/g, "'\\''");
 			claudeCmd += ` --append-system-prompt '${escaped}'`;
 		}
-		const pid = await createSession(tmuxSession, projectRoot, claudeCmd, {
+		const pid = await getSessionBackend().createSession(tmuxSession, projectRoot, claudeCmd, {
 			OVERSTORY_AGENT_NAME: flags.name,
 		});
 
@@ -205,11 +205,11 @@ async function startSupervisor(args: string[]): Promise<void> {
 			depth: flags.depth,
 			parent: flags.parent,
 		});
-		await sendKeys(tmuxSession, beacon);
+		await getSessionBackend().sendKeys(tmuxSession, beacon);
 
 		// Follow-up Enter to ensure submission
 		await Bun.sleep(500);
-		await sendKeys(tmuxSession, "");
+		await getSessionBackend().sendKeys(tmuxSession, "");
 
 		// Record session
 		const session: AgentSession = {
@@ -298,9 +298,9 @@ async function stopSupervisor(args: string[]): Promise<void> {
 		}
 
 		// Kill tmux session with process tree cleanup
-		const alive = await isSessionAlive(session.tmuxSession);
+		const alive = await getSessionBackend().isSessionAlive(session.tmuxSession);
 		if (alive) {
-			await killSession(session.tmuxSession);
+			await getSessionBackend().killSession(session.tmuxSession);
 		}
 
 		// Update session state
@@ -350,7 +350,7 @@ async function statusSupervisor(args: string[]): Promise<void> {
 				return;
 			}
 
-			const alive = await isSessionAlive(session.tmuxSession);
+			const alive = await getSessionBackend().isSessionAlive(session.tmuxSession);
 
 			// Reconcile state: we already filtered out completed/zombie above,
 			// so if tmux is dead this session needs to be marked as zombie.
@@ -404,7 +404,7 @@ async function statusSupervisor(args: string[]): Promise<void> {
 
 			const statuses = await Promise.all(
 				supervisors.map(async (session) => {
-					const alive = await isSessionAlive(session.tmuxSession);
+					const alive = await getSessionBackend().isSessionAlive(session.tmuxSession);
 
 					// Reconcile state
 					if (!alive && session.state !== "completed" && session.state !== "zombie") {

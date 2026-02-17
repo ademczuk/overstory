@@ -44,6 +44,10 @@ const mockConfig: OverstoryConfig = {
 		verbose: false,
 		redactSecrets: true,
 	},
+	bridge: {
+		enabled: false,
+		teamName: null,
+	},
 };
 
 describe("checkDependencies", () => {
@@ -57,7 +61,9 @@ describe("checkDependencies", () => {
 		const toolNames = checks.map((c) => c.name);
 		expect(toolNames).toContain("git availability");
 		expect(toolNames).toContain("bun availability");
-		expect(toolNames).toContain("tmux availability");
+		// Platform-dependent: tmux on Unix, pwsh on Windows
+		const IS_WIN = process.platform === "win32";
+		expect(toolNames).toContain(IS_WIN ? "pwsh availability" : "tmux availability");
 		expect(toolNames).toContain("bd availability");
 		expect(toolNames).toContain("mulch availability");
 	});

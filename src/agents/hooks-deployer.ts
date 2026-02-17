@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { AgentError } from "../errors.ts";
+import { IS_WINDOWS } from "../platform.ts";
 
 /**
  * Capabilities that must never modify project files.
@@ -126,7 +127,8 @@ interface HookEntry {
  */
 function getTemplatePath(): string {
 	// src/agents/hooks-deployer.ts -> repo root is ../../
-	return join(dirname(import.meta.dir), "..", "templates", "hooks.json.tmpl");
+	const templateName = IS_WINDOWS ? "hooks-win.json.tmpl" : "hooks.json.tmpl";
+	return join(dirname(import.meta.dir), "..", "templates", templateName);
 }
 
 /**
@@ -139,6 +141,122 @@ function getTemplatePath(): string {
  * no-ops for the user's own Claude Code session.
  */
 const ENV_GUARD = '[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;';
+
+/** PowerShell equivalent of ENV_GUARD for Windows. */
+const PWSH_ENV_GUARD = "if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }";
+
+/**
+ * Wrap a PowerShell script for execution as a Claude Code hook command on Windows.
+ * Claude Code uses cmd.exe for hooks, so we invoke pwsh explicitly.
+ */
+function wrapPwsh(script: string): string {
+	// Escape double quotes in the script for cmd.exe embedding
+	const escaped = script.replace(/"/g, '\\"');
+	return `pwsh -NoProfile -Command "${escaped}"`;
+}
+
+/**
+ * PowerShell: Build a PreToolUse guard that validates file paths within worktree boundary.
+ */
+function buildPwshPathBoundaryGuardScript(filePathField: string): string {
+	const script = [
+		`${PWSH_ENV_GUARD};`,
+		"if (-not $env:OVERSTORY_WORKTREE_PATH) { exit 0 };",
+		"$INPUT = [Console]::In.ReadLine();",
+		"try { $json = $INPUT | ConvertFrom-Json } catch { exit 0 };",
+		`$FILE_PATH = $json.tool_input.${filePathField};`,
+		"if (-not $FILE_PATH) { exit 0 };",
+		"if (-not [System.IO.Path]::IsPathRooted($FILE_PATH)) { $FILE_PATH = Join-Path (Get-Location) $FILE_PATH };",
+		"$FILE_PATH = [System.IO.Path]::GetFullPath($FILE_PATH);",
+		"$wt = $env:OVERSTORY_WORKTREE_PATH;",
+		"if ($FILE_PATH.StartsWith($wt + [System.IO.Path]::DirectorySeparatorChar) -or $FILE_PATH -eq $wt) { exit 0 };",
+		'Write-Output \'{"decision":"block","reason":"Path boundary violation: file is outside your assigned worktree."}\';',
+	].join(" ");
+	return wrapPwsh(script);
+}
+
+/**
+ * PowerShell: Build a Bash guard that inspects commands for dangerous git operations.
+ */
+function buildPwshBashGuardScript(agentName: string): string {
+	const canonicalPattern = CANONICAL_BRANCHES.join("|");
+	const script = [
+		`${PWSH_ENV_GUARD};`,
+		"$INPUT = [Console]::In.ReadLine();",
+		"try { $json = $INPUT | ConvertFrom-Json } catch { exit 0 };",
+		"$CMD = $json.tool_input.command;",
+		"if (-not $CMD) { exit 0 };",
+		`if ($CMD -match 'git\\s+push\\s+\\S+\\s+(${canonicalPattern})') {`,
+		`  Write-Output '{"decision":"block","reason":"Agents must not push to canonical branch (${CANONICAL_BRANCHES.join("/")})"}'; exit 0`,
+		"};",
+		"if ($CMD -match 'git\\s+reset\\s+--hard') {",
+		'  Write-Output \'{"decision":"block","reason":"git reset --hard is not allowed"}\'; exit 0',
+		"};",
+		"if ($CMD -match 'git\\s+checkout\\s+-b\\s') {",
+		`  if ($CMD -match 'git\\s+checkout\\s+-b\\s+(\\S+)') { $BRANCH = $Matches[1] };`,
+		`  if ($BRANCH -and -not ($BRANCH -match '^overstory/${agentName}/')) {`,
+		`    Write-Output '{"decision":"block","reason":"Branch must follow overstory/${agentName}/{bead-id} convention"}'; exit 0`,
+		"  }",
+		"};",
+	].join(" ");
+	return wrapPwsh(script);
+}
+
+/**
+ * PowerShell: Build a Bash guard for non-implementation agents blocking file modifications.
+ */
+function buildPwshBashFileGuardScript(
+	capability: string,
+	extraSafePrefixes: string[] = [],
+): string {
+	const allSafePrefixes = [...SAFE_BASH_PREFIXES, ...extraSafePrefixes];
+	const safePrefixChecks = allSafePrefixes
+		.map((prefix) => `if ($CMD -match '^\\s*${prefix.replace(/'/g, "''")}') { exit 0 };`)
+		.join(" ");
+
+	const dangerPattern = DANGEROUS_BASH_PATTERNS.join("|");
+
+	const script = [
+		`${PWSH_ENV_GUARD};`,
+		"$INPUT = [Console]::In.ReadLine();",
+		"try { $json = $INPUT | ConvertFrom-Json } catch { exit 0 };",
+		"$CMD = $json.tool_input.command;",
+		"if (-not $CMD) { exit 0 };",
+		safePrefixChecks,
+		`if ($CMD -match '${dangerPattern}') {`,
+		`  Write-Output '{"decision":"block","reason":"${capability} agents cannot modify files"}'; exit 0`,
+		"};",
+	].join(" ");
+	return wrapPwsh(script);
+}
+
+/**
+ * PowerShell: Build a Bash path boundary guard for file-modifying commands.
+ */
+function buildPwshBashPathBoundaryScript(): string {
+	const fileModifyPattern = FILE_MODIFYING_BASH_PATTERNS.join("|");
+
+	const script = [
+		`${PWSH_ENV_GUARD};`,
+		"if (-not $env:OVERSTORY_WORKTREE_PATH) { exit 0 };",
+		"$INPUT = [Console]::In.ReadLine();",
+		"try { $json = $INPUT | ConvertFrom-Json } catch { exit 0 };",
+		"$CMD = $json.tool_input.command;",
+		"if (-not $CMD) { exit 0 };",
+		`if (-not ($CMD -match '${fileModifyPattern}')) { exit 0 };`,
+		"$wt = $env:OVERSTORY_WORKTREE_PATH;",
+		"$tokens = $CMD -split '\\s+';",
+		"$absPaths = $tokens | Where-Object { [System.IO.Path]::IsPathRooted($_) };",
+		"if (-not $absPaths) { exit 0 };",
+		"foreach ($P in $absPaths) {",
+		"  $norm = $P -replace '[;\"''>]+$','';",
+		"  if (-not ($norm.StartsWith($wt + [System.IO.Path]::DirectorySeparatorChar) -or $norm -eq $wt)) {",
+		'    Write-Output \'{"decision":"block","reason":"Bash path boundary violation: command targets a path outside your worktree."}\'; exit 0',
+		"  }",
+		"};",
+	].join(" ");
+	return wrapPwsh(script);
+}
 
 /**
  * Build a PreToolUse guard script that validates file paths are within
@@ -181,18 +299,19 @@ export function buildPathBoundaryGuardScript(filePathField: string): string {
  * tools blocked, but the path guard catches any bypass).
  */
 export function getPathBoundaryGuards(): HookEntry[] {
+	const buildFn = IS_WINDOWS ? buildPwshPathBoundaryGuardScript : buildPathBoundaryGuardScript;
 	return [
 		{
 			matcher: "Write",
-			hooks: [{ type: "command", command: buildPathBoundaryGuardScript("file_path") }],
+			hooks: [{ type: "command", command: buildFn("file_path") }],
 		},
 		{
 			matcher: "Edit",
-			hooks: [{ type: "command", command: buildPathBoundaryGuardScript("file_path") }],
+			hooks: [{ type: "command", command: buildFn("file_path") }],
 		},
 		{
 			matcher: "NotebookEdit",
-			hooks: [{ type: "command", command: buildPathBoundaryGuardScript("notebook_path") }],
+			hooks: [{ type: "command", command: buildFn("notebook_path") }],
 		},
 	];
 }
@@ -205,14 +324,12 @@ export function getPathBoundaryGuards(): HookEntry[] {
  */
 function blockGuard(toolName: string, reason: string): HookEntry {
 	const response = JSON.stringify({ decision: "block", reason });
+	const command = IS_WINDOWS
+		? wrapPwsh(`${PWSH_ENV_GUARD}; Write-Output '${response.replace(/'/g, "''")}'`)
+		: `${ENV_GUARD} echo '${response}'`;
 	return {
 		matcher: toolName,
-		hooks: [
-			{
-				type: "command",
-				command: `${ENV_GUARD} echo '${response}'`,
-			},
-		],
+		hooks: [{ type: "command", command }],
 	};
 }
 
@@ -265,15 +382,13 @@ function buildBashGuardScript(agentName: string): string {
  * @param agentName - The agent name, used for branch naming validation
  */
 export function getDangerGuards(agentName: string): HookEntry[] {
+	const command = IS_WINDOWS
+		? buildPwshBashGuardScript(agentName)
+		: buildBashGuardScript(agentName);
 	return [
 		{
 			matcher: "Bash",
-			hooks: [
-				{
-					type: "command",
-					command: buildBashGuardScript(agentName),
-				},
-			],
+			hooks: [{ type: "command", command }],
 		},
 	];
 }
@@ -409,7 +524,12 @@ export function getBashPathBoundaryGuards(): HookEntry[] {
 	return [
 		{
 			matcher: "Bash",
-			hooks: [{ type: "command", command: buildBashPathBoundaryScript() }],
+			hooks: [
+				{
+					type: "command",
+					command: IS_WINDOWS ? buildPwshBashPathBoundaryScript() : buildBashPathBoundaryScript(),
+				},
+			],
 		},
 	];
 }
@@ -452,14 +572,12 @@ export function getCapabilityGuards(capability: string): HookEntry[] {
 
 		// Coordination capabilities get git add/commit whitelisted for beads/mulch sync
 		const extraSafe = COORDINATION_CAPABILITIES.has(capability) ? COORDINATION_SAFE_PREFIXES : [];
+		const fileGuardCommand = IS_WINDOWS
+			? buildPwshBashFileGuardScript(capability, extraSafe)
+			: buildBashFileGuardScript(capability, extraSafe);
 		const bashFileGuard: HookEntry = {
 			matcher: "Bash",
-			hooks: [
-				{
-					type: "command",
-					command: buildBashFileGuardScript(capability, extraSafe),
-				},
-			],
+			hooks: [{ type: "command", command: fileGuardCommand }],
 		};
 		guards.push(bashFileGuard);
 	}

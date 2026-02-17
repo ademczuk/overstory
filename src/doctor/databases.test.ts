@@ -36,6 +36,7 @@ describe("checkDatabases", () => {
 				nudgeIntervalMs: 60000,
 			},
 			logging: { verbose: false, redactSecrets: true },
+			bridge: { enabled: false, teamName: null },
 		};
 	});
 

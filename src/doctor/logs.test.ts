@@ -64,6 +64,10 @@ describe("checkLogs", () => {
 				verbose: false,
 				redactSecrets: true,
 			},
+			bridge: {
+				enabled: false,
+				teamName: null,
+			},
 		};
 
 		await mkdir(overstoryDir, { recursive: true });

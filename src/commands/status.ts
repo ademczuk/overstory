@@ -14,7 +14,7 @@ import { createMetricsStore } from "../metrics/store.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { listWorktrees } from "../worktree/manager.ts";
-import { listSessions } from "../worktree/tmux.ts";
+import { getSessionBackend } from "../worktree/session-backend.ts";
 
 /**
  * Parse a named flag value from args.
@@ -84,7 +84,7 @@ export async function gatherStatus(
 
 		let tmuxSessions: Array<{ name: string; pid: number }> = [];
 		try {
-			tmuxSessions = await listSessions();
+			tmuxSessions = await getSessionBackend().listSessions();
 		} catch {
 			// tmux might not be running
 		}

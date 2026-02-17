@@ -104,6 +104,10 @@ describe("checkConsistency", () => {
 				verbose: false,
 				redactSecrets: true,
 			},
+			bridge: {
+				enabled: false,
+				teamName: null,
+			},
 		};
 
 		// Reset mocks and create deps object
