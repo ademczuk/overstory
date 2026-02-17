@@ -14,6 +14,8 @@ import {
 	getPathBoundaryGuards,
 } from "./hooks-deployer.ts";
 
+const IS_WIN = process.platform === "win32";
+
 describe("deployHooks", () => {
 	let tempDir: string;
 
@@ -244,7 +246,12 @@ describe("deployHooks", () => {
 		expect(baseHook.hooks[0].command).toContain("--stdin");
 		expect(baseHook.hooks[0].command).toContain("overstory log tool-start");
 		expect(baseHook.hooks[0].command).toContain("stdin-agent");
-		expect(baseHook.hooks[0].command).toContain('read -r INPUT; echo "$INPUT" |');
+		if (IS_WIN) {
+			expect(baseHook.hooks[0].command).toContain("pwsh");
+			expect(baseHook.hooks[0].command).toContain("[Console]::In.ReadLine()");
+		} else {
+			expect(baseHook.hooks[0].command).toContain('read -r INPUT; echo "$INPUT" |');
+		}
 	});
 
 	test("PostToolUse hook pipes stdin to overstory log with --stdin flag", async () => {
@@ -259,7 +266,12 @@ describe("deployHooks", () => {
 		expect(postToolUse.hooks[0].command).toContain("--stdin");
 		expect(postToolUse.hooks[0].command).toContain("overstory log tool-end");
 		expect(postToolUse.hooks[0].command).toContain("stdin-agent");
-		expect(postToolUse.hooks[0].command).toContain('read -r INPUT; echo "$INPUT" |');
+		if (IS_WIN) {
+			expect(postToolUse.hooks[0].command).toContain("pwsh");
+			expect(postToolUse.hooks[0].command).toContain("[Console]::In.ReadLine()");
+		} else {
+			expect(postToolUse.hooks[0].command).toContain('read -r INPUT; echo "$INPUT" |');
+		}
 	});
 
 	test("PostToolUse hook includes mail check with debounce", async () => {
@@ -295,7 +307,12 @@ describe("deployHooks", () => {
 		expect(stop.hooks[0].command).toContain("--stdin");
 		expect(stop.hooks[0].command).toContain("overstory log session-end");
 		expect(stop.hooks[0].command).toContain("stdin-agent");
-		expect(stop.hooks[0].command).toContain('read -r INPUT; echo "$INPUT" |');
+		if (IS_WIN) {
+			expect(stop.hooks[0].command).toContain("pwsh");
+			expect(stop.hooks[0].command).toContain("[Console]::In.ReadLine()");
+		} else {
+			expect(stop.hooks[0].command).toContain('read -r INPUT; echo "$INPUT" |');
+		}
 	});
 
 	test("Stop hook includes mulch learn command", async () => {
@@ -396,8 +413,12 @@ describe("deployHooks", () => {
 	});
 
 	test("write failure throws AgentError", async () => {
-		// Use a path that will fail to write (read-only parent)
-		const invalidPath = "/dev/null/impossible-path";
+		// Create a regular file, then try to use it as a directory parent.
+		// mkdir fails with ENOTDIR on both Unix and Windows when a path
+		// component is a file rather than a directory.
+		const blocker = join(tempDir, "blocker");
+		await Bun.write(blocker, "I am a file, not a directory");
+		const invalidPath = join(blocker, "sub", "impossible-path");
 
 		try {
 			await deployHooks(invalidPath, "fail-agent");
@@ -439,7 +460,9 @@ describe("deployHooks", () => {
 			h.hooks[0]?.command?.includes("cannot modify files"),
 		);
 		expect(writeBlockGuard).toBeDefined();
-		expect(writeBlockGuard.hooks[0].command).toContain('"decision":"block"');
+		// On Windows, the JSON is double-escaped inside the pwsh wrapper
+		expect(writeBlockGuard.hooks[0].command).toContain("decision");
+		expect(writeBlockGuard.hooks[0].command).toContain("block");
 
 		// Should have multiple Bash guards: danger guard + file guard
 		const bashGuards = preToolUse.filter((h: { matcher: string }) => h.matcher === "Bash");
@@ -589,6 +612,53 @@ describe("deployHooks", () => {
 
 		expect(writeIdx).toBeLessThan(baseIdx);
 	});
+
+	test("deployHooks passes selectiveNativeTools opts through to guards", async () => {
+		const worktreePath = join(tempDir, "selective-wt");
+
+		await deployHooks(worktreePath, "selective-agent", "builder", {
+			selectiveNativeTools: true,
+		});
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+		const preToolUse = parsed.hooks.PreToolUse;
+
+		const guardMatchers = preToolUse
+			.filter((h: { matcher: string }) => h.matcher !== "")
+			.map((h: { matcher: string }) => h.matcher);
+
+		// TeamCreate/TeamDelete should always be blocked
+		expect(guardMatchers).toContain("TeamCreate");
+		expect(guardMatchers).toContain("TeamDelete");
+		// Task, SendMessage etc. should NOT be blocked in selective mode
+		expect(guardMatchers).not.toContain("Task");
+		expect(guardMatchers).not.toContain("SendMessage");
+	});
+
+	test("deployHooks without selectiveNativeTools blocks all native team tools", async () => {
+		const worktreePath = join(tempDir, "full-block-wt");
+
+		await deployHooks(worktreePath, "full-block-agent", "builder");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+		const preToolUse = parsed.hooks.PreToolUse;
+
+		const guardMatchers = preToolUse
+			.filter((h: { matcher: string }) => h.matcher !== "")
+			.map((h: { matcher: string }) => h.matcher);
+
+		// All 10 native team tools should be blocked
+		expect(guardMatchers).toContain("TeamCreate");
+		expect(guardMatchers).toContain("TeamDelete");
+		expect(guardMatchers).toContain("Task");
+		expect(guardMatchers).toContain("SendMessage");
+		expect(guardMatchers).toContain("TaskCreate");
+		expect(guardMatchers).toContain("TaskUpdate");
+	});
 });
 
 describe("getCapabilityGuards", () => {
@@ -728,7 +798,11 @@ describe("getCapabilityGuards", () => {
 		for (const tool of ["Write", "Edit", "NotebookEdit"]) {
 			const guard = guards.find((g) => g.matcher === tool);
 			expect(guard).toBeDefined();
-			expect(guard?.hooks[0]?.command).toContain('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;');
+			if (IS_WIN) {
+				expect(guard?.hooks[0]?.command).toContain("OVERSTORY_AGENT_NAME");
+			} else {
+				expect(guard?.hooks[0]?.command).toContain('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;');
+			}
 		}
 	});
 
@@ -736,7 +810,11 @@ describe("getCapabilityGuards", () => {
 		const guards = getCapabilityGuards("builder");
 		const taskGuard = guards.find((g) => g.matcher === "Task");
 		expect(taskGuard).toBeDefined();
-		expect(taskGuard?.hooks[0]?.command).toContain('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;');
+		if (IS_WIN) {
+			expect(taskGuard?.hooks[0]?.command).toContain("OVERSTORY_AGENT_NAME");
+		} else {
+			expect(taskGuard?.hooks[0]?.command).toContain('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;');
+		}
 	});
 
 	test("coordinator gets 14 guards (10 team + 3 tool blocks + 1 bash file guard)", () => {
@@ -747,6 +825,102 @@ describe("getCapabilityGuards", () => {
 	test("supervisor gets 14 guards (10 team + 3 tool blocks + 1 bash file guard)", () => {
 		const guards = getCapabilityGuards("supervisor");
 		expect(guards.length).toBe(NATIVE_TEAM_TOOL_COUNT + 4);
+	});
+
+	// --- Selective native tools mode ---
+
+	test("selectiveNativeTools: true blocks only TeamCreate and TeamDelete (2 always-blocked tools)", () => {
+		const guards = getCapabilityGuards("builder", { selectiveNativeTools: true });
+		const matchers = guards.map((g) => g.matcher);
+		// Only 2 always-blocked + 1 bash path boundary = 3 total for builder
+		expect(matchers.filter((m) => m === "TeamCreate")).toHaveLength(1);
+		expect(matchers.filter((m) => m === "TeamDelete")).toHaveLength(1);
+		// Task, SendMessage, etc. should NOT be blocked
+		expect(matchers).not.toContain("Task");
+		expect(matchers).not.toContain("SendMessage");
+		expect(matchers).not.toContain("TaskCreate");
+		expect(matchers).not.toContain("TaskUpdate");
+		expect(matchers).not.toContain("TaskList");
+		expect(matchers).not.toContain("TaskGet");
+		expect(matchers).not.toContain("TaskOutput");
+		expect(matchers).not.toContain("TaskStop");
+	});
+
+	test("selectiveNativeTools: true gives builder 3 guards (2 always-blocked + 1 bash path boundary)", () => {
+		const guards = getCapabilityGuards("builder", { selectiveNativeTools: true });
+		// 2 (TeamCreate, TeamDelete) + 1 (Bash path boundary) = 3
+		expect(guards.length).toBe(3);
+	});
+
+	test("selectiveNativeTools: true gives scout 6 guards (2 always-blocked + 3 tool blocks + 1 bash file guard)", () => {
+		const guards = getCapabilityGuards("scout", { selectiveNativeTools: true });
+		// 2 (TeamCreate, TeamDelete) + 3 (Write, Edit, NotebookEdit blocks) + 1 (Bash file guard) = 6
+		expect(guards.length).toBe(6);
+	});
+
+	test("selectiveNativeTools: false preserves default behavior (all 10 team tools blocked)", () => {
+		const guardsExplicitFalse = getCapabilityGuards("builder", { selectiveNativeTools: false });
+		const guardsDefault = getCapabilityGuards("builder");
+		expect(guardsExplicitFalse.length).toBe(guardsDefault.length);
+		const matchersExplicit = guardsExplicitFalse.map((g) => g.matcher);
+		const matchersDefault = guardsDefault.map((g) => g.matcher);
+		expect(matchersExplicit).toEqual(matchersDefault);
+	});
+
+	test("selectiveNativeTools: undefined preserves default behavior (all 10 team tools blocked)", () => {
+		const guardsUndefined = getCapabilityGuards("builder", { selectiveNativeTools: undefined });
+		const guardsDefault = getCapabilityGuards("builder");
+		expect(guardsUndefined.length).toBe(guardsDefault.length);
+	});
+
+	test("selective mode block reason mentions 'team topology', not 'overstory sling'", () => {
+		const guards = getCapabilityGuards("builder", { selectiveNativeTools: true });
+		const teamCreateGuard = guards.find((g) => g.matcher === "TeamCreate");
+		expect(teamCreateGuard).toBeDefined();
+		expect(teamCreateGuard?.hooks[0]?.command).toContain("team topology");
+		expect(teamCreateGuard?.hooks[0]?.command).not.toContain("overstory sling");
+	});
+
+	test("default mode block reason mentions 'overstory sling', not 'team topology'", () => {
+		const guards = getCapabilityGuards("builder");
+		const taskGuard = guards.find((g) => g.matcher === "Task");
+		expect(taskGuard).toBeDefined();
+		expect(taskGuard?.hooks[0]?.command).toContain("overstory sling");
+		expect(taskGuard?.hooks[0]?.command).not.toContain("team topology");
+	});
+
+	test("selective mode still blocks TeamCreate for all capabilities", () => {
+		for (const cap of [
+			"scout",
+			"reviewer",
+			"lead",
+			"coordinator",
+			"supervisor",
+			"builder",
+			"merger",
+		]) {
+			const guards = getCapabilityGuards(cap, { selectiveNativeTools: true });
+			const matchers = guards.map((g) => g.matcher);
+			expect(matchers).toContain("TeamCreate");
+			expect(matchers).toContain("TeamDelete");
+		}
+	});
+
+	test("selective mode allows Task for all capabilities", () => {
+		for (const cap of [
+			"scout",
+			"reviewer",
+			"lead",
+			"coordinator",
+			"supervisor",
+			"builder",
+			"merger",
+		]) {
+			const guards = getCapabilityGuards(cap, { selectiveNativeTools: true });
+			const matchers = guards.map((g) => g.matcher);
+			expect(matchers).not.toContain("Task");
+			expect(matchers).not.toContain("SendMessage");
+		}
 	});
 });
 
@@ -793,7 +967,11 @@ describe("getDangerGuards", () => {
 	test("guard command includes env var guard prefix", () => {
 		const guards = getDangerGuards("test-agent");
 		const command = guards[0]?.hooks[0]?.command ?? "";
-		expect(command).toContain('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;');
+		if (IS_WIN) {
+			expect(command).toContain("OVERSTORY_AGENT_NAME");
+		} else {
+			expect(command).toContain('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;');
+		}
 	});
 
 	test("all capabilities get Bash danger guards in deployed hooks", async () => {
@@ -1387,14 +1565,15 @@ describe("getPathBoundaryGuards", () => {
 		const guards = getPathBoundaryGuards();
 		const writeGuard = guards.find((g) => g.matcher === "Write");
 		const editGuard = guards.find((g) => g.matcher === "Edit");
-		expect(writeGuard?.hooks[0]?.command).toContain('"file_path"');
-		expect(editGuard?.hooks[0]?.command).toContain('"file_path"');
+		// On Windows the field name appears without surrounding quotes (pwsh dot-access)
+		expect(writeGuard?.hooks[0]?.command).toContain("file_path");
+		expect(editGuard?.hooks[0]?.command).toContain("file_path");
 	});
 
 	test("NotebookEdit guard extracts notebook_path field", () => {
 		const guards = getPathBoundaryGuards();
 		const notebookGuard = guards.find((g) => g.matcher === "NotebookEdit");
-		expect(notebookGuard?.hooks[0]?.command).toContain('"notebook_path"');
+		expect(notebookGuard?.hooks[0]?.command).toContain("notebook_path");
 	});
 
 	test("all guards include OVERSTORY_WORKTREE_PATH check", () => {
@@ -1541,7 +1720,11 @@ describe("getBashPathBoundaryGuards", () => {
 	test("guard command includes env var guard prefix", () => {
 		const guards = getBashPathBoundaryGuards();
 		const command = guards[0]?.hooks[0]?.command ?? "";
-		expect(command).toContain('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;');
+		if (IS_WIN) {
+			expect(command).toContain("OVERSTORY_AGENT_NAME");
+		} else {
+			expect(command).toContain('[ -z "$OVERSTORY_AGENT_NAME" ] && exit 0;');
+		}
 	});
 
 	test("guard blocks paths outside worktree", () => {

@@ -53,6 +53,33 @@ function formatMulchExpertise(expertise: string | undefined): string {
 	].join("\n");
 }
 
+/**
+ * Format guidance for using Claude Code native tools alongside overstory mail.
+ * When selective native tools mode is enabled, agents get a decision heuristic
+ * for choosing between CC's Task/SendMessage tools and overstory mail.
+ * Returns empty string when disabled (omits the section entirely).
+ */
+function formatNativeToolsGuidance(selectiveNativeTools: boolean | undefined): string {
+	if (!selectiveNativeTools) {
+		return "";
+	}
+	return [
+		"### Native Claude Code Tools (Selective Mode)",
+		"",
+		"You have access to Claude Code's native Task tool and SendMessage for **local subtasks within your worktree**:",
+		"",
+		"- **Task tool**: Spawn lightweight subagents for focused work (file analysis, test running, code generation)",
+		"- **SendMessage**: Communicate with in-process subagents you've spawned",
+		"",
+		"**Decision heuristic:**",
+		"- Need a quick local subtask? → Use CC's Task tool",
+		"- Need to communicate with OTHER Overstory agents? → Use `overstory mail` (above)",
+		"- Need a new git worktree or process-isolated work? → Request via `overstory mail` to your parent",
+		"",
+		"**NEVER use**: TeamCreate, TeamDelete (Overstory manages team topology)",
+	].join("\n");
+}
+
 /** Capabilities that are read-only and should not get quality gates for commits/tests/lint. */
 const READ_ONLY_CAPABILITIES = new Set(["scout", "reviewer"]);
 
@@ -192,6 +219,7 @@ export async function generateOverlay(config: OverlayConfig): Promise<string> {
 		"{{CONSTRAINTS}}": formatConstraints(config),
 		"{{SPEC_INSTRUCTION}}": specInstruction,
 		"{{BASE_DEFINITION}}": config.baseDefinition,
+		"{{NATIVE_TOOLS_GUIDANCE}}": formatNativeToolsGuidance(config.selectiveNativeTools),
 	};
 
 	let result = template;

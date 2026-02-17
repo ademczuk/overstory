@@ -67,6 +67,9 @@ describe("checkAgents", () => {
 				enabled: false,
 				teamName: null,
 			},
+			nativeTools: {
+				selective: false,
+			},
 		};
 	});
 

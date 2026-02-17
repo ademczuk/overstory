@@ -37,6 +37,7 @@ describe("checkDatabases", () => {
 			},
 			logging: { verbose: false, redactSecrets: true },
 			bridge: { enabled: false, teamName: null },
+			nativeTools: { selective: false },
 		};
 	});
 

@@ -108,6 +108,9 @@ describe("checkConsistency", () => {
 				enabled: false,
 				teamName: null,
 			},
+			nativeTools: {
+				selective: false,
+			},
 		};
 
 		// Reset mocks and create deps object

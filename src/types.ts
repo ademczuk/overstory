@@ -45,6 +45,9 @@ export interface OverstoryConfig {
 		enabled: boolean; // Opt-in: project Overstory events into Claude Code Task UI
 		teamName: string | null; // Override auto-generated CC team name
 	};
+	nativeTools: {
+		selective: boolean; // When true, allow CC native tools within workers for local subtasks
+	};
 }
 
 // === Agent Manifest ===
@@ -257,6 +260,8 @@ export interface OverlayConfig {
 	baseDefinition: string;
 	/** Pre-fetched mulch expertise output to embed directly in the overlay. */
 	mulchExpertise?: string;
+	/** When true, include guidance for using CC native Task/SendMessage tools alongside overstory mail. */
+	selectiveNativeTools?: boolean;
 }
 
 // === Merge Queue ===

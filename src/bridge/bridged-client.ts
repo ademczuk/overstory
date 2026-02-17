@@ -60,9 +60,11 @@ export function createBridgedMailClient(store: MailStore, bridge: TaskBridge): M
 
 			// Bridge projection — best-effort, fire-and-forget
 			if (!bridge.isDisabled) {
-				projectToTaskBridge(bridge, msg.type, msg.payload, msg.from, msg.to).catch(() => {
-					// Swallowed — bridge has its own circuit breaker
-				});
+				projectToTaskBridge(bridge, msg.type, msg.payload, msg.from, msg.to, messageId).catch(
+					() => {
+						// Swallowed — bridge has its own circuit breaker
+					},
+				);
 			}
 
 			return messageId;
@@ -79,28 +81,29 @@ async function projectToTaskBridge(
 	payload: MailPayloadMap[MailProtocolType],
 	from: string,
 	to: string,
+	mailId?: string,
 ): Promise<void> {
 	switch (type) {
 		case "dispatch":
-			await bridge.onDispatch(payload as DispatchPayload, from, to);
+			await bridge.onDispatch(payload as DispatchPayload, from, to, mailId);
 			break;
 		case "assign":
-			await bridge.onAssign(payload as AssignPayload);
+			await bridge.onAssign(payload as AssignPayload, mailId);
 			break;
 		case "worker_done":
-			await bridge.onWorkerDone(payload as WorkerDonePayload, from);
+			await bridge.onWorkerDone(payload as WorkerDonePayload, from, mailId);
 			break;
 		case "merge_ready":
-			await bridge.onMergeReady(payload as MergeReadyPayload);
+			await bridge.onMergeReady(payload as MergeReadyPayload, mailId);
 			break;
 		case "merged":
-			await bridge.onMerged(payload as MergedPayload);
+			await bridge.onMerged(payload as MergedPayload, mailId);
 			break;
 		case "merge_failed":
-			await bridge.onMergeFailed(payload as MergeFailedPayload);
+			await bridge.onMergeFailed(payload as MergeFailedPayload, mailId);
 			break;
 		case "escalation":
-			await bridge.onEscalation(payload as EscalationPayload, from);
+			await bridge.onEscalation(payload as EscalationPayload, from, mailId);
 			break;
 		case "health_check":
 			// Too frequent — skip to avoid task clutter

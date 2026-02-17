@@ -51,6 +51,9 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 		enabled: false,
 		teamName: null,
 	},
+	nativeTools: {
+		selective: false, // Backward compatible: block all native tools by default
+	},
 };
 
 const CONFIG_FILENAME = "config.yaml";

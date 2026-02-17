@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS bridge_tasks (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 )`;
 
+const CREATE_PROJECTION_LOG = `
+CREATE TABLE IF NOT EXISTS projection_log (
+  mail_id TEXT PRIMARY KEY,
+  projected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  event_type TEXT NOT NULL,
+  success INTEGER NOT NULL DEFAULT 1
+)`;
+
 const MAX_CONSECUTIVE_FAILURES = 3;
 
 /**
@@ -98,6 +106,7 @@ export class BridgeStore {
 		this.db.exec("PRAGMA journal_mode=WAL");
 		this.db.exec("PRAGMA busy_timeout=5000");
 		this.db.exec(CREATE_BRIDGE_TABLE);
+		this.db.exec(CREATE_PROJECTION_LOG);
 	}
 
 	getByBead(beadId: string): BridgeTaskRow | null {
@@ -143,6 +152,56 @@ export class BridgeStore {
 		} | null;
 		this.db.prepare("DELETE FROM bridge_tasks").run();
 		return count?.cnt ?? 0;
+	}
+
+	/** Record that a mail message was projected to CC Task UI. */
+	logProjection(mailId: string, eventType: string, success = true): void {
+		this.db
+			.prepare(
+				"INSERT OR REPLACE INTO projection_log (mail_id, event_type, success) VALUES (?, ?, ?)",
+			)
+			.run(mailId, eventType, success ? 1 : 0);
+	}
+
+	/** Check if a mail message has been projected. */
+	isProjected(mailId: string): boolean {
+		const row = this.db
+			.prepare("SELECT 1 FROM projection_log WHERE mail_id = ?")
+			.get(mailId) as Record<string, number> | null;
+		return row !== null;
+	}
+
+	/** Get projection statistics. */
+	getProjectionStats(): {
+		total: number;
+		successful: number;
+		failed: number;
+		lastProjectedAt: string | null;
+	} {
+		const stats = this.db
+			.prepare(
+				`SELECT
+				COUNT(*) as total,
+				SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
+				SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed,
+				MAX(projected_at) as lastProjectedAt
+			FROM projection_log`,
+			)
+			.get() as {
+			total: number;
+			successful: number;
+			failed: number;
+			lastProjectedAt: string | null;
+		};
+		return stats;
+	}
+
+	/** Purge old projection logs. */
+	purgeProjections(olderThanDays = 7): number {
+		const result = this.db
+			.prepare("DELETE FROM projection_log WHERE projected_at < datetime('now', ?)")
+			.run(`-${olderThanDays} days`);
+		return result.changes;
 	}
 
 	close(): void {
@@ -252,7 +311,12 @@ export class TaskBridge {
 		});
 	}
 
-	async onDispatch(payload: DispatchPayload, from: string, to: string): Promise<void> {
+	async onDispatch(
+		payload: DispatchPayload,
+		from: string,
+		to: string,
+		mailId?: string,
+	): Promise<void> {
 		await this.guard(async () => {
 			const taskId = await this.nextTaskId();
 			const task: CCTask = {
@@ -275,10 +339,11 @@ export class TaskBridge {
 			};
 			await this.writeTask(task);
 			this.store.insert(payload.beadId, taskId, this.teamName, to);
+			if (mailId) this.store.logProjection(mailId, "dispatch");
 		});
 	}
 
-	async onAssign(payload: AssignPayload): Promise<void> {
+	async onAssign(payload: AssignPayload, mailId?: string): Promise<void> {
 		await this.guard(async () => {
 			const existing = this.store.getByBead(payload.beadId);
 			if (existing) {
@@ -306,10 +371,11 @@ export class TaskBridge {
 				await this.writeTask(task);
 				this.store.insert(payload.beadId, taskId, this.teamName, payload.workerName);
 			}
+			if (mailId) this.store.logProjection(mailId, "assign");
 		});
 	}
 
-	async onWorkerDone(payload: WorkerDonePayload, from: string): Promise<void> {
+	async onWorkerDone(payload: WorkerDonePayload, from: string, mailId?: string): Promise<void> {
 		await this.guard(async () => {
 			const existing = this.store.getByBead(payload.beadId);
 			if (existing) {
@@ -321,10 +387,11 @@ export class TaskBridge {
 				}
 				this.store.updateStatus(payload.beadId, "completed");
 			}
+			if (mailId) this.store.logProjection(mailId, "worker_done");
 		});
 	}
 
-	async onMergeReady(payload: MergeReadyPayload): Promise<void> {
+	async onMergeReady(payload: MergeReadyPayload, mailId?: string): Promise<void> {
 		await this.guard(async () => {
 			const taskId = await this.nextTaskId();
 			const task: CCTask = {
@@ -344,10 +411,11 @@ export class TaskBridge {
 			}
 
 			await this.writeTask(task);
+			if (mailId) this.store.logProjection(mailId, "merge_ready");
 		});
 	}
 
-	async onMerged(payload: MergedPayload): Promise<void> {
+	async onMerged(payload: MergedPayload, mailId?: string): Promise<void> {
 		await this.guard(async () => {
 			const existing = this.store.getByBead(payload.beadId);
 			if (existing) {
@@ -357,10 +425,11 @@ export class TaskBridge {
 					await this.writeTask(task);
 				}
 			}
+			if (mailId) this.store.logProjection(mailId, "merged");
 		});
 	}
 
-	async onMergeFailed(payload: MergeFailedPayload): Promise<void> {
+	async onMergeFailed(payload: MergeFailedPayload, mailId?: string): Promise<void> {
 		await this.guard(async () => {
 			const existing = this.store.getByBead(payload.beadId);
 			if (existing) {
@@ -370,10 +439,11 @@ export class TaskBridge {
 					await this.writeTask(task);
 				}
 			}
+			if (mailId) this.store.logProjection(mailId, "merge_failed");
 		});
 	}
 
-	async onEscalation(payload: EscalationPayload, from: string): Promise<void> {
+	async onEscalation(payload: EscalationPayload, from: string, mailId?: string): Promise<void> {
 		await this.guard(async () => {
 			const taskId = await this.nextTaskId();
 			const task: CCTask = {
@@ -393,6 +463,7 @@ export class TaskBridge {
 				blockedBy: [],
 			};
 			await this.writeTask(task);
+			if (mailId) this.store.logProjection(mailId, "escalation");
 		});
 	}
 

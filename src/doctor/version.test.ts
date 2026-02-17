@@ -48,6 +48,9 @@ const mockConfig: OverstoryConfig = {
 		enabled: false,
 		teamName: null,
 	},
+	nativeTools: {
+		selective: false,
+	},
 };
 
 describe("checkVersion", () => {

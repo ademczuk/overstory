@@ -377,6 +377,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 			capability,
 			baseDefinition,
 			mulchExpertise,
+			selectiveNativeTools: config.nativeTools.selective,
 		};
 
 		try {
@@ -397,7 +398,9 @@ export async function slingCommand(args: string[]): Promise<void> {
 		}
 
 		// 9. Deploy hooks config (capability-specific guards)
-		await deployHooks(worktreePath, name, capability);
+		await deployHooks(worktreePath, name, capability, {
+			selectiveNativeTools: config.nativeTools.selective,
+		});
 
 		// 10. Claim beads issue
 		if (config.beads.enabled) {

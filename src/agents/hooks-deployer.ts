@@ -30,14 +30,12 @@ const COORDINATION_CAPABILITIES = new Set(["coordinator", "supervisor", "monitor
  */
 const COORDINATION_SAFE_PREFIXES = ["git add", "git commit"];
 
-/**
- * Claude Code native team/task tools that bypass overstory orchestration.
- * All overstory agents must use `overstory sling` for delegation, not these.
- */
-const NATIVE_TEAM_TOOLS = [
+/** Tools that must ALWAYS be blocked — team topology is Overstory's responsibility. */
+const ALWAYS_BLOCKED_NATIVE_TOOLS = ["TeamCreate", "TeamDelete"];
+
+/** Tools that can be SELECTIVELY allowed within workers for local CC subagent coordination. */
+const SELECTIVELY_ALLOWED_NATIVE_TOOLS = [
 	"Task",
-	"TeamCreate",
-	"TeamDelete",
 	"SendMessage",
 	"TaskCreate",
 	"TaskUpdate",
@@ -46,6 +44,12 @@ const NATIVE_TEAM_TOOLS = [
 	"TaskOutput",
 	"TaskStop",
 ];
+
+/**
+ * Claude Code native team/task tools that bypass overstory orchestration.
+ * Union of always-blocked and selectively-allowed for backward compatibility.
+ */
+const NATIVE_TEAM_TOOLS = [...ALWAYS_BLOCKED_NATIVE_TOOLS, ...SELECTIVELY_ALLOWED_NATIVE_TOOLS];
 
 /** Tools that non-implementation agents must not use. */
 const WRITE_TOOLS = ["Write", "Edit", "NotebookEdit"];
@@ -551,15 +555,23 @@ export function getBashPathBoundaryGuards(): HookEntry[] {
  *
  * Note: All capabilities also receive Bash danger guards via getDangerGuards().
  */
-export function getCapabilityGuards(capability: string): HookEntry[] {
+export function getCapabilityGuards(
+	capability: string,
+	opts?: { selectiveNativeTools?: boolean },
+): HookEntry[] {
 	const guards: HookEntry[] = [];
 
 	// Block Claude Code native team/task tools for ALL overstory agents.
-	// Agents must use `overstory sling` for delegation, not native Task/Team tools.
-	const teamToolGuards = NATIVE_TEAM_TOOLS.map((tool) =>
+	// In selective mode, only block team topology tools (TeamCreate/TeamDelete);
+	// in full-block mode (default), block everything including Task/SendMessage.
+	const toolsToBlock = opts?.selectiveNativeTools ? ALWAYS_BLOCKED_NATIVE_TOOLS : NATIVE_TEAM_TOOLS;
+
+	const teamToolGuards = toolsToBlock.map((tool) =>
 		blockGuard(
 			tool,
-			`Overstory agents must use 'overstory sling' for delegation — ${tool} is not allowed`,
+			opts?.selectiveNativeTools
+				? `Overstory manages team topology — ${tool} is not allowed`
+				: `Overstory agents must use 'overstory sling' for delegation — ${tool} is not allowed`,
 		),
 	);
 	guards.push(...teamToolGuards);
@@ -600,12 +612,14 @@ export function getCapabilityGuards(capability: string): HookEntry[] {
  * @param worktreePath - Absolute path to the agent's git worktree
  * @param agentName - The unique name of the agent
  * @param capability - Agent capability (builder, scout, reviewer, lead, merger)
+ * @param opts - Options: selectiveNativeTools allows CC native task tools within workers
  * @throws {AgentError} If the template is not found or the write fails
  */
 export async function deployHooks(
 	worktreePath: string,
 	agentName: string,
 	capability = "builder",
+	opts?: { selectiveNativeTools?: boolean },
 ): Promise<void> {
 	const templatePath = getTemplatePath();
 	const file = Bun.file(templatePath);
@@ -637,7 +651,7 @@ export async function deployHooks(
 	const config = JSON.parse(content) as { hooks: Record<string, HookEntry[]> };
 	const pathGuards = getPathBoundaryGuards();
 	const dangerGuards = getDangerGuards(agentName);
-	const capabilityGuards = getCapabilityGuards(capability);
+	const capabilityGuards = getCapabilityGuards(capability, opts);
 	const allGuards = [...pathGuards, ...dangerGuards, ...capabilityGuards];
 
 	if (allGuards.length > 0) {

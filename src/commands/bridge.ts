@@ -39,11 +39,13 @@ async function bridgeStatus(args: string[]): Promise<void> {
 	try {
 		const teamName = store.getTeamName();
 		const tasks = store.getAll();
+		const projectionStats = store.getProjectionStats();
 
 		const status = {
 			enabled: config.bridge.enabled,
 			teamName: teamName ?? resolveBridgeTeamName(config.project.name, config.bridge.teamName),
 			taskCount: tasks.length,
+			projections: projectionStats,
 			tasks: tasks.map((t) => ({
 				beadId: t.bead_id,
 				ccTaskId: t.cc_task_id,
@@ -59,6 +61,13 @@ async function bridgeStatus(args: string[]): Promise<void> {
 			process.stdout.write(`Bridge: ${config.bridge.enabled ? "enabled" : "disabled"}\n`);
 			process.stdout.write(`  Team:   ${status.teamName}\n`);
 			process.stdout.write(`  Tasks:  ${status.taskCount}\n`);
+
+			process.stdout.write(
+				`  Projections: ${projectionStats.total} total (${projectionStats.successful} ok, ${projectionStats.failed} failed)\n`,
+			);
+			if (projectionStats.lastProjectedAt) {
+				process.stdout.write(`  Last projected: ${projectionStats.lastProjectedAt}\n`);
+			}
 
 			if (tasks.length > 0) {
 				process.stdout.write("\n  Bead → CC Task mappings:\n");

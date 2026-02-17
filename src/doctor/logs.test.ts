@@ -68,6 +68,9 @@ describe("checkLogs", () => {
 				enabled: false,
 				teamName: null,
 			},
+			nativeTools: {
+				selective: false,
+			},
 		};
 
 		await mkdir(overstoryDir, { recursive: true });
