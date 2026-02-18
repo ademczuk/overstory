@@ -95,9 +95,34 @@ export async function getDefaultBranch(repoDir: string): Promise<string> {
 
 /**
  * Remove a temp directory. Safe to call even if the directory doesn't exist.
+ *
+ * On Windows, SQLite WAL-mode files (.db-wal, .db-shm) may remain briefly
+ * locked after Database.close(). We retry a few times; on final failure we
+ * swallow the error rather than failing the test — OS temp cleanup handles
+ * eventual removal.
+ *
+ * NOTE: Uses setTimeout-based sleep instead of Bun.sleep to avoid a deadlock
+ * in bun:test's afterEach hooks on Windows (Bun.sleep hangs the test runner).
  */
 export async function cleanupTempDir(dir: string): Promise<void> {
-	await rm(dir, { recursive: true, force: true });
+	const maxAttempts = 3;
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		try {
+			await rm(dir, { recursive: true, force: true });
+			return;
+		} catch (err: unknown) {
+			const code = (err as { code?: string }).code;
+			if ((code === "EBUSY" || code === "EPERM") && attempt < maxAttempts) {
+				await new Promise((r) => setTimeout(r, 100));
+			} else if (code === "EBUSY" || code === "EPERM") {
+				// Final attempt failed — swallow on Windows. OS temp cleanup
+				// handles eventual removal. Don't fail tests over cleanup.
+				return;
+			} else {
+				throw err;
+			}
+		}
+	}
 }
 
 /**

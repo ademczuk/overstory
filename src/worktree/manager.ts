@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { WorktreeError } from "../errors.ts";
 
 /**
@@ -110,7 +110,8 @@ function parseWorktreeOutput(output: string): WorktreeEntry[] {
 		}
 
 		if (path.length > 0) {
-			entries.push({ path, head, branch });
+			// Normalize path separators: git outputs forward slashes on MSYS2/Windows
+			entries.push({ path: resolve(path), head, branch });
 		}
 	}
 
@@ -142,9 +143,12 @@ export async function removeWorktree(
 	path: string,
 	options?: { force?: boolean; forceBranch?: boolean },
 ): Promise<void> {
-	// First, figure out which branch this worktree is on so we can clean it up
+	// First, figure out which branch this worktree is on so we can clean it up.
+	// Normalize paths for comparison: git outputs forward slashes on MSYS2/Windows
+	// while Node.js path APIs use backslashes.
 	const worktrees = await listWorktrees(repoRoot);
-	const entry = worktrees.find((wt) => wt.path === path);
+	const normalizedPath = resolve(path);
+	const entry = worktrees.find((wt) => resolve(wt.path) === normalizedPath);
 	const branchName = entry?.branch ?? "";
 
 	// Remove the worktree (--force handles untracked files and uncommitted changes)
@@ -156,6 +160,15 @@ export async function removeWorktree(
 		worktreePath: path,
 		branchName,
 	});
+
+	// Prune stale worktree admin entries before branch deletion.
+	// On Windows, the admin directory under .git/worktrees/ may linger after
+	// removal, causing git to think the branch is still checked out.
+	try {
+		await runGit(repoRoot, ["worktree", "prune"]);
+	} catch {
+		// Best-effort — prune failure shouldn't block branch deletion attempt
+	}
 
 	// Delete the associated branch after worktree removal.
 	// Use -D (force) when forceBranch is set, since the branch may not have

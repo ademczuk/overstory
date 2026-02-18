@@ -6,9 +6,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { OverstoryConfig } from "../types.ts";
 import { checkLogs } from "./logs.ts";
 
@@ -77,7 +78,7 @@ describe("checkLogs", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	test("warns when logs/ directory does not exist", async () => {

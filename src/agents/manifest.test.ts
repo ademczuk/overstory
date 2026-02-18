@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
+import { cleanupTempDir } from "../test-helpers.ts";
 import { createManifestLoader } from "./manifest.ts";
 
 const VALID_MANIFEST = {
@@ -40,7 +41,7 @@ describe("createManifestLoader", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	/** Write the manifest JSON and create matching .md files. */

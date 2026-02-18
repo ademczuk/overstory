@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { access, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { LogEvent } from "../types.ts";
 import { createLogger } from "./logger.ts";
 
@@ -15,7 +16,7 @@ describe("createLogger", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	async function readLogFile(filename: string): Promise<string> {

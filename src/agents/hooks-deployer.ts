@@ -183,18 +183,18 @@ function buildPwshPathBoundaryGuardScript(filePathField: string): string {
  * PowerShell: Build a Bash guard that inspects commands for dangerous git operations.
  */
 function buildPwshBashGuardScript(agentName: string): string {
-	const canonicalPattern = CANONICAL_BRANCHES.join("|");
 	const script = [
 		`${PWSH_ENV_GUARD};`,
 		"$INPUT = [Console]::In.ReadLine();",
 		"try { $json = $INPUT | ConvertFrom-Json } catch { exit 0 };",
 		"$CMD = $json.tool_input.command;",
 		"if (-not $CMD) { exit 0 };",
-		`if ($CMD -match 'git\\s+push\\s+\\S+\\s+(${canonicalPattern})') {`,
-		`  Write-Output '{"decision":"block","reason":"Agents must not push to canonical branch (${CANONICAL_BRANCHES.join("/")})"}'; exit 0`,
+		// Block all git push — agents must never push to remote (matches bash guard behavior)
+		"if ($CMD -match '\\bgit\\s+push\\b') {",
+		`  Write-Output '{"decision":"block","reason":"git push is blocked \\u2014 use overstory merge to integrate changes, push manually when ready"}'; exit 0`,
 		"};",
 		"if ($CMD -match 'git\\s+reset\\s+--hard') {",
-		'  Write-Output \'{"decision":"block","reason":"git reset --hard is not allowed"}\'; exit 0',
+		'  Write-Output \'{"decision":"block","reason":"git reset --hard is not allowed \\u2014 it destroys uncommitted work"}\'; exit 0',
 		"};",
 		"if ($CMD -match 'git\\s+checkout\\s+-b\\s') {",
 		`  if ($CMD -match 'git\\s+checkout\\s+-b\\s+(\\S+)') { $BRANCH = $Matches[1] };`,

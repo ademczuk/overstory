@@ -19,7 +19,6 @@ import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createTaskBridge, resolveBridgeTeamName } from "../bridge/task-bridge.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
-import { IS_WINDOWS } from "../platform.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { isProcessRunning } from "../watchdog/health.ts";
@@ -48,6 +47,7 @@ export interface CoordinatorDeps {
 		isSessionAlive: (name: string) => Promise<boolean>;
 		killSession: (name: string) => Promise<void>;
 		sendKeys: (name: string, keys: string) => Promise<void>;
+		attachSession: (name: string) => void;
 	};
 	_watchdog?: {
 		start: () => Promise<{ pid: number } | null>;
@@ -431,10 +431,8 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 			process.stdout.write(`  PID:     ${pid}\n`);
 		}
 
-		if (shouldAttach && !IS_WINDOWS) {
-			Bun.spawnSync(["tmux", "attach-session", "-t", tmuxSession], {
-				stdio: ["inherit", "inherit", "inherit"],
-			});
+		if (shouldAttach) {
+			tmux.attachSession(tmuxSession);
 		}
 	} finally {
 		store.close();

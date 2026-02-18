@@ -15,11 +15,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEventStore } from "../events/store.ts";
 import { createSessionStore } from "../sessions/store.ts";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { AgentSession, HealthCheck, StoredEvent } from "../types.ts";
 import { runDaemonTick } from "./daemon.ts";
 
@@ -162,7 +163,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-	await rm(tempRoot, { recursive: true, force: true });
+	await cleanupTempDir(tempRoot);
 });
 
 describe("daemon tick", () => {
@@ -1098,7 +1099,7 @@ describe("daemon mulch failure recording", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempRoot, { recursive: true, force: true });
+		await cleanupTempDir(tempRoot);
 	});
 
 	/** Track calls to the recordFailure mock. */

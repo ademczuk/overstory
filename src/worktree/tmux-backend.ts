@@ -42,4 +42,10 @@ export class TmuxBackend implements SessionBackend {
 		const output = await new Response(proc.stdout).text();
 		return output.trim() || null;
 	}
+
+	attachSession(name: string): void {
+		Bun.spawnSync(["tmux", "attach-session", "-t", name], {
+			stdio: ["inherit", "inherit", "inherit"],
+		});
+	}
 }

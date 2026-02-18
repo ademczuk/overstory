@@ -6,9 +6,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDir } from "../test-helpers.ts";
 import { openSessionStore } from "./compat.ts";
 
 let tempDir: string;
@@ -22,7 +23,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-	await rm(tempDir, { recursive: true, force: true });
+	await cleanupTempDir(tempDir);
 });
 
 /** Create a sessions.json with the given entries. */

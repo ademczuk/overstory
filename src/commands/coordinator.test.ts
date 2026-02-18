@@ -91,6 +91,9 @@ function makeFakeTmux(sessionAliveMap: Record<string, boolean> = {}): {
 		sendKeys: async (name: string, keys: string): Promise<void> => {
 			calls.sendKeys.push({ name, keys });
 		},
+		attachSession: (_name: string): void => {
+			// No-op in tests — attach is interactive/blocking
+		},
 	};
 
 	return { tmux, calls };

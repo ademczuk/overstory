@@ -7,10 +7,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ValidationError } from "../errors.ts";
+import { cleanupTempDir } from "../test-helpers.ts";
 import { dashboardCommand } from "./dashboard.ts";
 
 describe("dashboardCommand", () => {
@@ -31,7 +32,7 @@ describe("dashboardCommand", () => {
 
 	afterEach(async () => {
 		process.stdout.write = originalWrite;
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	function output(): string {

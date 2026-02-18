@@ -7,9 +7,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDir } from "../test-helpers.ts";
 import { buildTriagePrompt, classifyResponse, triageAgent } from "./triage.ts";
 
 describe("classifyResponse", () => {
@@ -97,7 +98,7 @@ describe("triageAgent", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempRoot, { recursive: true, force: true });
+		await cleanupTempDir(tempRoot);
 	});
 
 	test("returns 'extend' when no logs directory exists", async () => {

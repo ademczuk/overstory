@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDir } from "../test-helpers.ts";
 import { watchCommand } from "./watch.ts";
 
 /**
@@ -66,7 +67,7 @@ describe("watchCommand", () => {
 		process.stderr.write = originalStderrWrite;
 		process.exitCode = originalExitCode;
 		process.chdir(originalCwd);
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	function output(): string {

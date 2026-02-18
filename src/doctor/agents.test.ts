@@ -6,9 +6,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { OverstoryConfig } from "../types.ts";
 import { checkAgents } from "./agents.ts";
 
@@ -74,7 +75,7 @@ describe("checkAgents", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	test("fails when manifest is missing", async () => {

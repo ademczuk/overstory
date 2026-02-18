@@ -2,15 +2,19 @@
  * Windows session backend: detached processes with PID tracking.
  *
  * Replaces tmux on Windows by:
- * - Spawning Claude Code via Bun.spawn with stdout/stderr to log files
+ * - Spawning Claude Code via a turn-runner relay daemon (win-relay.ts)
+ *   that runs each turn as a separate `claude -p` process with
+ *   `--resume <session_id>` for conversation continuity
+ * - Using stdin pipe for NDJSON user messages (replaces tmux send-keys)
  * - Tracking sessions in a SQLite table (win_sessions)
  * - Using taskkill /F /T for process tree cleanup
- * - Falling back to the mail system for sendKeys (agents already poll mail)
+ * - Falling back to the mail system for sendKeys when the in-process handle is unavailable
  * - Reading stdout log files for captureOutput
  */
 
 import { Database } from "bun:sqlite";
-import { mkdir } from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
+import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
@@ -59,6 +63,134 @@ function findOverstoryDir(): string {
 	return join(projectRoot, ".overstory");
 }
 
+/**
+ * In-memory handle to a spawned process's stdin.
+ * Needed because Bun.spawn stdin pipes can't be reopened from PID alone.
+ * Falls back to mail-based sendKeys when the handle is unavailable
+ * (e.g., process spawned by a different overstory invocation).
+ */
+const stdinHandles = new Map<string, { stdin: WritableStream<Uint8Array>; pid: number }>();
+
+/**
+ * In-memory map of session name -> inbox NDJSON file path.
+ * Used by sendKeys() to write messages that the relay daemon forwards to stdin.
+ * Works across process boundaries (unlike stdinHandles).
+ */
+const inboxPaths = new Map<string, string>();
+
+/**
+ * Parse a shell command string into an arguments array, respecting quotes.
+ *
+ * Handles single quotes (including the '\'' escape idiom used by coordinator.ts
+ * for --append-system-prompt), double quotes, and backslash escaping.
+ *
+ * Examples:
+ *   "claude --model opus" => ["claude", "--model", "opus"]
+ *   "claude --flag 'hello world'" => ["claude", "--flag", "hello world"]
+ *   "claude --text 'it'\\''s here'" => ["claude", "--text", "it's here"]
+ */
+function parseShellCommand(command: string): string[] {
+	const args: string[] = [];
+	let current = "";
+	let inSingleQuote = false;
+	let inDoubleQuote = false;
+	let i = 0;
+
+	while (i < command.length) {
+		const ch = command.charAt(i);
+
+		if (inSingleQuote) {
+			if (ch === "'") {
+				// Check for the '\'' idiom (end quote, escaped quote, start quote)
+				if (command[i + 1] === "\\" && command[i + 2] === "'" && command[i + 3] === "'") {
+					current += "'";
+					i += 4;
+					continue;
+				}
+				inSingleQuote = false;
+				i++;
+				continue;
+			}
+			current += ch;
+			i++;
+			continue;
+		}
+
+		if (inDoubleQuote) {
+			if (ch === "\\") {
+				const next = command[i + 1];
+				if (next === '"' || next === "\\" || next === "$" || next === "`") {
+					current += next;
+					i += 2;
+					continue;
+				}
+			}
+			if (ch === '"') {
+				inDoubleQuote = false;
+				i++;
+				continue;
+			}
+			current += ch;
+			i++;
+			continue;
+		}
+
+		// Outside quotes
+		if (ch === "'") {
+			inSingleQuote = true;
+			i++;
+			continue;
+		}
+		if (ch === '"') {
+			inDoubleQuote = true;
+			i++;
+			continue;
+		}
+		if (ch === "\\") {
+			const next = command[i + 1];
+			if (next !== undefined) {
+				current += next;
+				i += 2;
+				continue;
+			}
+		}
+		if (/\s/.test(ch)) {
+			if (current.length > 0) {
+				args.push(current);
+				current = "";
+			}
+			i++;
+			continue;
+		}
+		current += ch;
+		i++;
+	}
+
+	if (current.length > 0) {
+		args.push(current);
+	}
+
+	return args;
+}
+
+/**
+ * Format a user message as a stream-json NDJSON line for Claude Code stdin.
+ *
+ * Stream-json is Claude Code's purpose-built protocol for programmatic
+ * multi-turn conversations over pipes (no TTY needed).
+ */
+function formatStreamJsonUserMessage(text: string): string {
+	return JSON.stringify({
+		type: "user",
+		session_id: "",
+		message: {
+			role: "user",
+			content: [{ type: "text", text }],
+		},
+		parent_tool_use_id: null,
+	});
+}
+
 export class WinProcessBackend implements SessionBackend {
 	async createSession(
 		name: string,
@@ -74,38 +206,88 @@ export class WinProcessBackend implements SessionBackend {
 
 		const stdoutPath = join(logDir, "stdout.log");
 		const stderrPath = join(logDir, "stderr.log");
-
-		// Use Bun.file() handles as spawn stdout/stderr targets
-		const stdoutFile = Bun.file(stdoutPath);
-		const stderrFile = Bun.file(stderrPath);
+		// Clear old log files from previous session
+		await Bun.write(stdoutPath, "");
+		await Bun.write(stderrPath, "");
 
 		// Resolve overstory binary path for PATH injection
 		const overstoryBinDir = await this.detectBinDir();
 
-		// Build environment with PATH augmentation
+		// Build environment with PATH augmentation.
+		// Unset CLAUDECODE so nested Claude Code sessions don't refuse to start
+		// (Claude Code rejects launch when it detects it's inside another session).
 		const spawnEnv: Record<string, string | undefined> = {
 			...process.env,
 			...env,
+			CLAUDECODE: undefined,
 		};
 		if (overstoryBinDir) {
 			const existingPath = process.env.PATH ?? "";
 			spawnEnv.PATH = `${overstoryBinDir};${existingPath}`;
 		}
 
-		// Parse command string into args array
-		// Claude Code command format: "claude --model <model> --dangerously-skip-permissions"
-		const args = command.split(/\s+/).filter((s) => s.length > 0);
+		// Parse command string into args array, respecting shell quoting
+		// (handles single-quoted --append-system-prompt content from coordinator.ts)
+		const args = parseShellCommand(command);
 
-		const proc = Bun.spawn(args, {
+		// Stream-json flags are injected by the relay daemon (win-relay.ts),
+		// NOT here. The relay manages turn lifecycle: first turn uses the
+		// original args + -p + stream-json, subsequent turns use --resume.
+		// We pass the raw args to the relay which handles flag injection.
+
+		// Spawn via the relay daemon so that sendKeys() works across process
+		// boundaries. The relay holds Claude Code's stdin pipe and polls an
+		// inbox NDJSON file for new messages to forward.
+		const inboxPath = join(logDir, "inbox.ndjson");
+		// Clear stale inbox from previous session (prevents replaying old messages)
+		await Bun.write(inboxPath, "");
+		// import.meta.dir is Bun-specific: returns the proper filesystem directory
+		// path without the leading-slash issue that URL.pathname has on Windows.
+		const relayScript = join(import.meta.dir, "win-relay.ts");
+
+		// Build env as string pairs for the relay (filter out undefined values)
+		const cleanEnv: Record<string, string> = {};
+		for (const [k, v] of Object.entries(spawnEnv)) {
+			if (v !== undefined) cleanEnv[k] = v;
+		}
+
+		const relayArgs = [
+			"bun",
+			"run",
+			relayScript,
+			inboxPath,
+			stdoutPath,
+			stderrPath,
 			cwd,
-			stdout: stdoutFile,
-			stderr: stderrFile,
-			env: spawnEnv,
-			// On Windows, stdin must be provided for the process to not inherit
+			"--",
+			...args,
+		];
+
+		// Log relay errors to a dedicated file for debugging
+		const relayLogPath = join(logDir, "relay.log");
+		const relayProc = Bun.spawn(relayArgs, {
+			cwd,
 			stdin: "ignore",
+			stdout: "ignore",
+			stderr: Bun.file(relayLogPath),
+			env: cleanEnv,
 		});
 
-		const pid = proc.pid;
+		// Wait briefly for relay to write Claude Code's PID
+		await Bun.sleep(1_500);
+		const pidFile = Bun.file(`${inboxPath}.pid`);
+		let pid: number;
+		if (await pidFile.exists()) {
+			const pidText = await pidFile.text();
+			pid = Number.parseInt(pidText.trim(), 10);
+			if (Number.isNaN(pid)) pid = relayProc.pid;
+		} else {
+			// Relay hasn't written PID yet — use relay PID as fallback
+			pid = relayProc.pid;
+		}
+
+		// Store inbox path so sendKeys() can write to it from any process
+		inboxPaths.set(name, inboxPath);
 
 		// Register in SQLite
 		const db = openWinSessionsDb(overstoryDir);
@@ -138,6 +320,9 @@ export class WinProcessBackend implements SessionBackend {
 			return; // Session not found, nothing to kill
 		}
 
+		// Clean up stdin handle
+		stdinHandles.delete(name);
+
 		// taskkill /F /T kills the entire process tree in one call
 		await this.killProcessTree(row.pid);
 
@@ -168,12 +353,46 @@ export class WinProcessBackend implements SessionBackend {
 	}
 
 	async sendKeys(name: string, keys: string): Promise<void> {
-		// On Windows, there is no tmux to send keys to.
-		// For empty keys (the "follow-up Enter" pattern), this is a no-op.
+		// In stream-json mode, empty keys (the "follow-up Enter" pattern) are
+		// a no-op — there's no TUI input line to submit.
 		if (keys.trim().length === 0) return;
 
-		// For non-empty keys (nudge messages), send via the mail system.
-		// Agents poll mail on every hook invocation (UserPromptSubmit, PostToolUse).
+		// Primary: write to the inbox NDJSON file for the relay daemon.
+		// Works across process boundaries (any CLI invocation can send messages).
+		const inbox = inboxPaths.get(name) ?? this.resolveInboxPath(name);
+		if (inbox) {
+			try {
+				const ndjsonLine = formatStreamJsonUserMessage(keys);
+				await appendFile(inbox, `${ndjsonLine}\n`);
+				return;
+			} catch {
+				// Inbox write failed — fall through to mail
+			}
+		}
+
+		// Secondary: in-process stdin handle (same process that spawned the session)
+		const handle = stdinHandles.get(name);
+		if (handle && this.isProcessAlive(handle.pid)) {
+			try {
+				const ndjsonLine = formatStreamJsonUserMessage(keys);
+				const data = new TextEncoder().encode(`${ndjsonLine}\n`);
+				const writer = (handle.stdin as unknown as { write(data: Uint8Array): number }).write;
+				if (typeof writer === "function") {
+					writer.call(handle.stdin, data);
+				} else {
+					const writable = handle.stdin.getWriter();
+					await writable.write(data);
+					writable.releaseLock();
+				}
+				return;
+			} catch {
+				stdinHandles.delete(name);
+			}
+		}
+
+		// Fallback: no stdin handle or inbox available.
+
+		// Send via the mail system — agents poll mail on every hook invocation.
 		const overstoryDir = findOverstoryDir();
 		const mailDbPath = join(overstoryDir, "mail.db");
 
@@ -342,6 +561,58 @@ export class WinProcessBackend implements SessionBackend {
 		}
 	}
 
+	/**
+	 * Resolve the inbox NDJSON file path for a session.
+	 * Works even when called from a different process (no in-memory state needed).
+	 *
+	 * The log directory name is the full session name (e.g., "overstory-myproject-coordinator"),
+	 * but callers often pass just the agent name ("coordinator"). We check the SQLite
+	 * registry first, then try a glob pattern as fallback.
+	 */
+	private resolveInboxPath(name: string): string | null {
+		const overstoryDir = findOverstoryDir();
+
+		// Direct match first (caller passed the full session name)
+		const directPath = join(overstoryDir, "logs", name, "inbox.ndjson");
+		if (existsSync(directPath)) return directPath;
+
+		// Query SQLite for sessions whose name contains the agent name
+		try {
+			const db = openWinSessionsDb(overstoryDir);
+			try {
+				const row = db
+					.prepare(
+						"SELECT name FROM win_sessions WHERE name LIKE ? ORDER BY started_at DESC LIMIT 1",
+					)
+					.get(`%${name}%`) as { name: string } | null;
+				if (row) {
+					const dbPath = join(overstoryDir, "logs", row.name, "inbox.ndjson");
+					if (existsSync(dbPath)) return dbPath;
+				}
+			} finally {
+				db.close();
+			}
+		} catch {
+			// DB may not exist yet
+		}
+
+		// Glob fallback: find a directory matching *-{name}
+		try {
+			const logsDir = join(overstoryDir, "logs");
+			const entries = readdirSync(logsDir);
+			for (const entry of entries) {
+				if (entry.endsWith(`-${name}`)) {
+					const globPath = join(logsDir, entry, "inbox.ndjson");
+					if (existsSync(globPath)) return globPath;
+				}
+			}
+		} catch {
+			// logs dir may not exist
+		}
+
+		return null;
+	}
+
 	async killProcessTree(rootPid: number, _gracePeriodMs?: number): Promise<void> {
 		// taskkill /F /T /PID kills the entire tree in one call
 		// /F = force, /T = tree (all children), /PID = target process
@@ -355,6 +626,36 @@ export class WinProcessBackend implements SessionBackend {
 		} catch {
 			// taskkill may fail if process is already gone
 		}
+	}
+
+	attachSession(name: string): void {
+		const overstoryDir = findOverstoryDir();
+		const db = openWinSessionsDb(overstoryDir);
+
+		let row: WinSessionRow | null = null;
+		try {
+			row = db
+				.prepare("SELECT * FROM win_sessions WHERE name = ?")
+				.get(name) as WinSessionRow | null;
+		} finally {
+			db.close();
+		}
+
+		if (!row) {
+			process.stderr.write(`Session "${name}" not found\n`);
+			return;
+		}
+
+		// Tail the stdout log interactively (Ctrl+C to detach).
+		// PowerShell's Get-Content -Wait is the Windows equivalent of `tail -f`.
+		process.stdout.write(`Attaching to ${name} (tailing ${row.stdout_path})...\n`);
+		process.stdout.write("Press Ctrl+C to detach.\n\n");
+		Bun.spawnSync(
+			["powershell", "-NoProfile", "-Command", `Get-Content -Wait -Tail 50 "${row.stdout_path}"`],
+			{
+				stdio: ["inherit", "inherit", "inherit"],
+			},
+		);
 	}
 
 	/** Detect the directory containing the overstory binary. */

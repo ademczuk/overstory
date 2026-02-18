@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { DEFAULT_CONFIG, loadConfig, resolveProjectRoot } from "./config.ts";
@@ -14,7 +14,7 @@ describe("loadConfig", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	async function writeConfig(yaml: string): Promise<void> {
@@ -194,7 +194,7 @@ describe("validateConfig", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	async function writeConfig(yaml: string): Promise<void> {

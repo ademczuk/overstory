@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
@@ -55,7 +55,7 @@ describe("primeCommand", () => {
 		process.stdout.write = originalWrite;
 		process.stderr.write = originalStderrWrite;
 		process.chdir(originalCwd);
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	function output(): string {

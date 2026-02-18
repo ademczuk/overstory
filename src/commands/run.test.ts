@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionStore } from "../sessions/store.ts";
 import { createRunStore, createSessionStore } from "../sessions/store.ts";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { AgentSession, InsertRun, RunStore } from "../types.ts";
 
 let tempDir: string;
@@ -31,7 +32,7 @@ beforeEach(async () => {
 afterEach(async () => {
 	runStore.close();
 	sessionStore.close();
-	await rm(tempDir, { recursive: true, force: true });
+	await cleanupTempDir(tempDir);
 });
 
 /** Write a run ID to current-run.txt. */

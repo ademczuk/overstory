@@ -78,6 +78,16 @@ export interface SessionBackend {
 	 * @param gracePeriodMs - Time to wait between SIGTERM and SIGKILL (Unix only)
 	 */
 	killProcessTree(rootPid: number, gracePeriodMs?: number): Promise<void>;
+
+	/**
+	 * Attach to a session interactively (blocking).
+	 *
+	 * On Unix: `tmux attach-session -t <name>` (inherits stdio).
+	 * On Windows: tails the agent's stdout log via `Get-Content -Wait`.
+	 *
+	 * @param name - Session name to attach to
+	 */
+	attachSession(name: string): void;
 }
 
 /** Lazy singleton. */

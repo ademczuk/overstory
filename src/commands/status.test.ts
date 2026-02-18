@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { AgentSession } from "../types.ts";
 import { printStatus, type StatusData, statusCommand, type VerboseAgentDetail } from "./status.ts";
 
@@ -266,7 +267,7 @@ describe("--watch deprecation", () => {
 		} finally {
 			process.stderr.write = originalStderr;
 			process.chdir(originalCwd);
-			await rm(tmpDir, { recursive: true, force: true });
+			await cleanupTempDir(tmpDir);
 		}
 
 		const err = stderrChunks.join("");

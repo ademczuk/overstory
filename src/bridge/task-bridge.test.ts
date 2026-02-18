@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDir } from "../test-helpers.ts";
 import {
 	BridgeStore,
 	type CCTask,
@@ -32,7 +33,7 @@ describe("BridgeStore", () => {
 
 	afterEach(async () => {
 		store.close();
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	test("insert and getByBead", () => {
@@ -113,7 +114,7 @@ describe("TaskBridge", () => {
 
 	afterEach(async () => {
 		bridge.getStore().close();
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	describe("createTeam", () => {
@@ -616,7 +617,7 @@ describe("createTaskBridge", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	test("creates bridge with store and team name", () => {

@@ -19,7 +19,6 @@ import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
-import { IS_WINDOWS } from "../platform.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { getSessionBackend } from "../worktree/session-backend.ts";
@@ -183,10 +182,8 @@ async function startMonitor(args: string[]): Promise<void> {
 			process.stdout.write(`  PID:     ${pid}\n`);
 		}
 
-		if (shouldAttach && !IS_WINDOWS) {
-			Bun.spawnSync(["tmux", "attach-session", "-t", tmuxSession], {
-				stdio: ["inherit", "inherit", "inherit"],
-			});
+		if (shouldAttach) {
+			getSessionBackend().attachSession(tmuxSession);
 		}
 	} finally {
 		store.close();

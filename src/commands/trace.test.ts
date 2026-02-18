@@ -9,12 +9,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ValidationError } from "../errors.ts";
 import { createEventStore } from "../events/store.ts";
 import { createSessionStore } from "../sessions/store.ts";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { InsertEvent } from "../types.ts";
 import { traceCommand } from "./trace.ts";
 
@@ -65,7 +66,7 @@ describe("traceCommand", () => {
 	afterEach(async () => {
 		process.stdout.write = originalWrite;
 		process.chdir(originalCwd);
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	function output(): string {

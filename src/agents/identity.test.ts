@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { AgentIdentity } from "../types.ts";
 import { createIdentity, loadIdentity, updateIdentity } from "./identity.ts";
 
@@ -14,7 +15,7 @@ describe("identity", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	describe("createIdentity", () => {

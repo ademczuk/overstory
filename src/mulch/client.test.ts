@@ -6,11 +6,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentError } from "../errors.ts";
 import { whichCommand } from "../platform.ts";
+import { cleanupTempDir } from "../test-helpers.ts";
 import { createMulchClient } from "./client.ts";
 
 // Check if mulch is available
@@ -31,7 +32,7 @@ describe("createMulchClient", () => {
 	});
 
 	afterEach(async () => {
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	/**

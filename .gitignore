@@ -26,7 +26,31 @@ Thumbs.db
 .overstory/metrics.db-wal
 .overstory/metrics.db-shm
 .overstory/sessions.json
+.overstory/sessions.db
+.overstory/sessions.db-wal
+.overstory/sessions.db-shm
+.overstory/events.db
+.overstory/events.db-wal
+.overstory/events.db-shm
 .overstory/merge-queue.json
+.overstory/merge-queue.db
+.overstory/merge-queue.db-wal
+.overstory/merge-queue.db-shm
+.overstory/win-sessions.db
+.overstory/win-sessions.db-wal
+.overstory/win-sessions.db-shm
+.overstory/mail-check-state.json
+.overstory/current-run.txt
+.overstory/agents/
+
+# Local settings
+.claude/settings.local.json
+
+# Runtime artifacts
+data/
+memories.db
+server.log
+delegation-log.txt
 
 # Test artifacts
 coverage/

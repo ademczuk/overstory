@@ -6,12 +6,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEventStore } from "../events/store.ts";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
+import { cleanupTempDir } from "../test-helpers.ts";
 import type { StoredEvent } from "../types.ts";
 import { mailCommand } from "./mail.ts";
 
@@ -58,7 +59,7 @@ describe("mailCommand", () => {
 	afterEach(async () => {
 		process.stdout.write = origWrite;
 		process.chdir(origCwd);
-		await rm(tempDir, { recursive: true, force: true });
+		await cleanupTempDir(tempDir);
 	});
 
 	describe("list", () => {
