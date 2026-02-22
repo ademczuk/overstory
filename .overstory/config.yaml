@@ -3,7 +3,7 @@
 
 project:
   name: overstory
-  root: C:/Projects/_Github/overstory
+  root: /Users/jayminwest/Projects/overstory
   canonicalBranch: main
 agents:
   manifestPath: .overstory/agent-manifest.json
