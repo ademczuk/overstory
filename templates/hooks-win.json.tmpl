@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "pwsh -NoProfile -Command \"if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory prime --agent {{AGENT_NAME}}\""
+						"command": "pwsh -NoProfile -Command \"if (-not \\$env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory prime --agent {{AGENT_NAME}}\""
 					}
 				]
 			}
@@ -17,7 +17,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "pwsh -NoProfile -Command \"if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory mail check --inject --agent {{AGENT_NAME}}\""
+						"command": "pwsh -NoProfile -Command \"if (-not \\$env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory mail check --inject --agent {{AGENT_NAME}}\""
 					}
 				]
 			}
@@ -28,7 +28,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "pwsh -NoProfile -Command \"if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }; $INPUT = [Console]::In.ReadLine(); $INPUT | overstory log tool-start --agent {{AGENT_NAME}} --stdin\""
+						"command": "pwsh -NoProfile -Command \"if (-not \\$env:OVERSTORY_AGENT_NAME) { exit 0 }; \\$INPUT = [Console]::In.ReadLine(); \\$INPUT | overstory log tool-start --agent {{AGENT_NAME}} --stdin\""
 					}
 				]
 			}
@@ -39,11 +39,11 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "pwsh -NoProfile -Command \"if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }; $INPUT = [Console]::In.ReadLine(); $INPUT | overstory log tool-end --agent {{AGENT_NAME}} --stdin\""
+						"command": "pwsh -NoProfile -Command \"if (-not \\$env:OVERSTORY_AGENT_NAME) { exit 0 }; \\$INPUT = [Console]::In.ReadLine(); \\$INPUT | overstory log tool-end --agent {{AGENT_NAME}} --stdin\""
 					},
 					{
 						"type": "command",
-						"command": "pwsh -NoProfile -Command \"if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory mail check --inject --agent {{AGENT_NAME}} --debounce 500\""
+						"command": "pwsh -NoProfile -Command \"if (-not \\$env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory mail check --inject --agent {{AGENT_NAME}} --debounce 500\""
 					}
 				]
 			},
@@ -52,7 +52,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "pwsh -NoProfile -Command \"if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory mail check --inject --agent {{AGENT_NAME}} --debounce 30000\""
+						"command": "pwsh -NoProfile -Command \"if (-not \\$env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory mail check --inject --agent {{AGENT_NAME}} --debounce 30000\""
 					}
 				]
 			}
@@ -63,11 +63,11 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "pwsh -NoProfile -Command \"if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }; $INPUT = [Console]::In.ReadLine(); $INPUT | overstory log session-end --agent {{AGENT_NAME}} --stdin\""
+						"command": "pwsh -NoProfile -Command \"if (-not \\$env:OVERSTORY_AGENT_NAME) { exit 0 }; \\$INPUT = [Console]::In.ReadLine(); \\$INPUT | overstory log session-end --agent {{AGENT_NAME}} --stdin\""
 					},
 					{
 						"type": "command",
-						"command": "pwsh -NoProfile -Command \"if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }; mulch learn\""
+						"command": "pwsh -NoProfile -Command \"if (-not \\$env:OVERSTORY_AGENT_NAME) { exit 0 }; mulch learn\""
 					}
 				]
 			}
@@ -78,7 +78,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "pwsh -NoProfile -Command \"if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory prime --agent {{AGENT_NAME}} --compact\""
+						"command": "pwsh -NoProfile -Command \"if (-not \\$env:OVERSTORY_AGENT_NAME) { exit 0 }; overstory prime --agent {{AGENT_NAME}} --compact\""
 					}
 				]
 			}

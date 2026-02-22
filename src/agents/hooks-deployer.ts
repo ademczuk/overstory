@@ -151,11 +151,20 @@ const PWSH_ENV_GUARD = "if (-not $env:OVERSTORY_AGENT_NAME) { exit 0 }";
 
 /**
  * Wrap a PowerShell script for execution as a Claude Code hook command on Windows.
- * Claude Code uses cmd.exe for hooks, so we invoke pwsh explicitly.
+ *
+ * Claude Code executes hooks through bash (Git Bash / MSYS) even on Windows.
+ * Bash double-quoted strings interpolate $var, \, ", and ` — destroying
+ * PowerShell's $env:, $INPUT, $json, etc. We escape all four so bash passes
+ * the script through verbatim to pwsh.
+ *
+ * Escaping order matters: \ first to avoid double-escaping subsequent replacements.
  */
 function wrapPwsh(script: string): string {
-	// Escape double quotes in the script for cmd.exe embedding
-	const escaped = script.replace(/"/g, '\\"');
+	const escaped = script
+		.replace(/\\/g, "\\\\") // \ → \\  (must be first)
+		.replace(/"/g, '\\"') //   " → \"
+		.replace(/\$/g, "\\$") // $ → \$
+		.replace(/`/g, "\\`"); // ` → \`
 	return `pwsh -NoProfile -Command "${escaped}"`;
 }
 
