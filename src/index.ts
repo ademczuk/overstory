@@ -24,6 +24,7 @@ import { inspectCommand } from "./commands/inspect.ts";
 import { logCommand } from "./commands/log.ts";
 import { logsCommand } from "./commands/logs.ts";
 import { mailCommand } from "./commands/mail.ts";
+import { mcpCommand } from "./commands/mcp.ts";
 import { mergeCommand } from "./commands/merge.ts";
 import { metricsCommand } from "./commands/metrics.ts";
 import { monitorCommand } from "./commands/monitor.ts";
@@ -76,6 +77,7 @@ Commands:
   run [sub]               Manage runs (list/show/complete)
   replay [options]        Interleaved chronological replay across agents
   bridge <sub>            Claude Code Task bridge (status/sync/reset)
+  mcp <sub>               MCP server (serve/register/unregister/status)
   costs [options]          Token/cost analysis and breakdown
   metrics                 Show session metrics
 
@@ -104,6 +106,7 @@ const COMMANDS = [
 	"hooks",
 	"monitor",
 	"mail",
+	"mcp",
 	"merge",
 	"nudge",
 	"group",
@@ -239,6 +242,9 @@ async function main(): Promise<void> {
 			break;
 		case "mail":
 			await mailCommand(commandArgs);
+			break;
+		case "mcp":
+			await mcpCommand(commandArgs);
 			break;
 		case "merge":
 			await mergeCommand(commandArgs);
