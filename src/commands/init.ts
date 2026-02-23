@@ -559,7 +559,9 @@ export async function initCommand(args: string[]): Promise<void> {
 	// 4. Write config.yaml
 	const config = structuredClone(DEFAULT_CONFIG);
 	config.project.name = projectName;
-	config.project.root = projectRoot;
+	// Write "." as root — config.ts always resolves the real path at runtime.
+	// Never write absolute paths to config.yaml (they leak machine paths in git history).
+	config.project.root = ".";
 	config.project.canonicalBranch = canonicalBranch;
 
 	const configYaml = serializeConfigToYaml(config);
